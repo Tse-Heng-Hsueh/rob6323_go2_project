@@ -203,3 +203,9 @@ class Rob6323Go2EnvCfg(DirectRLEnvCfg):
     # - Angular velocity penalty (minimize roll/pitch)
     # - Torque penalty (don't use excessive force)
     # - Contact force penalties (feet should touch gently)
+
+    # Additional reward scales
+    orient_reward_scale = -5.0
+    lin_vel_z_reward_scale = -0.02
+    dof_vel_reward_scale = -0.0001
+    ang_vel_xy_reward_scale = -0.001

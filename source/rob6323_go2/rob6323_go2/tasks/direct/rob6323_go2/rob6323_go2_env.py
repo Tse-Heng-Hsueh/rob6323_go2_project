@@ -345,6 +345,30 @@ class Rob6323Go2Env(DirectRLEnv):
         self._step_contact_targets()
         rew_raibert_heuristic = self._reward_raibert_heuristic()
 
+        # 1. Penalize non-vertical orientation (projected gravity on XY plane)
+        # todo: We want the robot to stay upright, so gravity should only project onto Z.
+        # Calculate the sum of squares of the X and Y components of projected_gravity_b.
+        rew_orient = (
+            torch.sum(torch.square(self.robot.data.projected_gravity_b[:, :2]), dim=1) * self.cfg.orient_reward_scale
+        )
+
+        # 2. Penalize vertical velocity (z-component of base linear velocity)
+        # todo: Square the Z component of the base linear velocity.
+        rew_lin_vel_z = (
+            torch.sum(torch.square(self.robot.data.root_lin_vel_b[:, 2]), dim=1)
+            + torch.sum(torch.square(self.robot.data.root_ang_vel_b[:, :2]), dim=1)  # not sure about this
+        ) * self.cfg.lin_vel_z_reward_scale
+
+        # 3. Penalize high joint velocities
+        # todo: Sum the squares of all joint velocities.
+        rew_dof_vel = torch.sum(torch.square(self.robot.data.joint_vel), dim=1) * self.cfg.dof_vel_reward_scale
+
+        # 4. Penalize angular velocity in XY plane (roll/pitch)
+        # todo: Sum the squares of the X and Y components of the base angular velocity.
+        rew_ang_vel_xy = (
+            torch.sum(torch.square(self.robot.data.root_ang_vel_b[:, :2]), dim=1) * self.cfg.ang_vel_xy_reward_scale
+        )  # not sure about this
+
         # --- Combine All Rewards ---
         # Scale by reward weights and timestep duration
         rewards = {
@@ -353,6 +377,10 @@ class Rob6323Go2Env(DirectRLEnv):
             "rew_action_rate": rew_action_rate * self.cfg.action_rate_reward_scale,
             # Note: This reward is negative (penalty) in the config
             "raibert_heuristic": rew_raibert_heuristic * self.cfg.raibert_heuristic_reward_scale,
+            "orient": rew_orient * self.cfg.orient_reward_scale,
+            "lin_vel_z": rew_lin_vel_z * self.cfg.lin_vel_z_reward_scale,
+            "dof_vel": rew_dof_vel * self.cfg.dof_vel_reward_scale,
+            "ang_vel_xy": rew_ang_vel_xy * self.cfg.ang_vel_xy_reward_scale,
         }
         reward = torch.sum(torch.stack(list(rewards.values())), dim=0)
 
