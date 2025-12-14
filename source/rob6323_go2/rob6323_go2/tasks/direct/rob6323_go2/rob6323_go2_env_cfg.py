@@ -122,6 +122,8 @@ class Rob6323Go2EnvCfg(DirectRLEnvCfg):
         damping=0.0,  # CRITICAL: Set to 0 to disable implicit D-gain
     )
 
+    base_height_min = 0.20  # Terminate if base is lower than 20cm
+
     # ============================================
     # PARALLEL ENVIRONMENT SETTINGS
     # ============================================

@@ -363,8 +363,12 @@ class Rob6323Go2Env(DirectRLEnv):
         # When upright, gravity projects as negative Z. If positive → robot flipped!
         cstr_upsidedown = self.robot.data.projected_gravity_b[:, 2] > 0
 
+        # terminate if base is too low
+        base_height = self.robot.data.root_pos_w[:, 2]
+        cstr_base_height_min = base_height < self.cfg.base_height_min
+
         # Robot "died" if either failure condition is true
-        died = cstr_termination_contacts | cstr_upsidedown
+        died = cstr_termination_contacts | cstr_upsidedown | cstr_base_height_min
 
         return died, time_out
 
