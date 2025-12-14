@@ -72,8 +72,8 @@ class Rob6323Go2Env(DirectRLEnv):
             for key in [
                 "track_lin_vel_xy_exp",  # Reward for tracking XY velocity commands
                 "track_ang_vel_z_exp",  # Reward for tracking yaw rate command
-                "rew_action_rate",  # Penalty for jerky/sudden actions (to be implemented)
-                "raibert_heuristic",  # Reward for good gait patterns (to be implemented)
+                "rew_action_rate",  # Penalty for jerky/sudden actions (Part 1: IMPLEMENTED)
+                "raibert_heuristic",  # Reward for good gait patterns (Part 4: TODO)
             ]
         }
 
@@ -93,8 +93,10 @@ class Rob6323Go2Env(DirectRLEnv):
         # --- Body Part Indices ---
         # Get indices of specific body parts for contact detection
         self._base_id, _ = self._contact_sensor.find_bodies("base")  # Robot's main body/torso
-        # self._feet_ids, _ = self._contact_sensor.find_bodies(".*foot")  # All four feet (to be used later)
-        # self._undesired_contact_body_ids, _ = self._contact_sensor.find_bodies(".*thigh")  # Parts that shouldn't touch ground
+        # self._feet_ids, _ = self._contact_sensor.find_bodies(".*foot")
+        # All four feet (to be used later)
+        # self._undesired_contact_body_ids, _ = self._contact_sensor.find_bodies(".*thigh")
+        # Parts that shouldn't touch ground
 
         # --- Debug Visualization ---
         # Setup velocity visualization arrows (green=target, blue=actual)
@@ -116,7 +118,7 @@ class Rob6323Go2Env(DirectRLEnv):
         # Create robot with all its joints and sensors
         self.robot = Articulation(self.cfg.robot_cfg)
 
-        # Create contact sensor to detect which body parts touch the ground
+        # Create contact sensor to detect which body parts touch ground
         self._contact_sensor = ContactSensor(self.cfg.contact_sensor)
 
         # Create terrain (flat ground plane in baseline)
@@ -243,11 +245,33 @@ class Rob6323Go2Env(DirectRLEnv):
         yaw_rate_error = torch.square(self._commands[:, 2] - self.robot.data.root_ang_vel_b[:, 2])
         yaw_rate_error_mapped = torch.exp(-yaw_rate_error / 0.25)
 
+        # --- Action Rate Penalization (Part 1) ---
+        # Penalize high-frequency action changes to encourage smooth control.
+        # This prevents jerky movements and makes the robot's gait more natural.
+
+        # First derivative: Penalize large changes in action (velocity of action change)
+        # ||a(t) - a(t-1)||²
+        rew_action_rate = torch.sum(torch.square(self._actions - self.last_actions[:, :, 0]), dim=1) * (
+            self.cfg.action_scale**2
+        )
+
+        # Second derivative: Penalize sudden acceleration in actions (acceleration of action change)
+        # ||a(t) - 2*a(t-1) + a(t-2)||²
+        # This catches oscillations that first derivative alone might miss
+        rew_action_rate += torch.sum(
+            torch.square(self._actions - 2 * self.last_actions[:, :, 0] + self.last_actions[:, :, 1]), dim=1
+        ) * (self.cfg.action_scale**2)
+
+        # Update the prev action hist (roll buffer and insert new action)
+        self.last_actions = torch.roll(self.last_actions, 1, 2)
+        self.last_actions[:, :, 0] = self._actions[:]
+
         # --- Combine All Rewards ---
         # Scale by reward weights and timestep duration
         rewards = {
-            "track_lin_vel_xy_exp": lin_vel_error_mapped * self.cfg.lin_vel_reward_scale * self.step_dt,
-            "track_ang_vel_z_exp": yaw_rate_error_mapped * self.cfg.yaw_rate_reward_scale * self.step_dt,
+            "track_lin_vel_xy_exp": lin_vel_error_mapped * self.cfg.lin_vel_reward_scale,  # Removed step_dt
+            "track_ang_vel_z_exp": yaw_rate_error_mapped * self.cfg.yaw_rate_reward_scale,  # Removed step_dt
+            "rew_action_rate": rew_action_rate * self.cfg.action_rate_reward_scale,
         }
         reward = torch.sum(torch.stack(list(rewards.values())), dim=0)
 

@@ -118,7 +118,7 @@ class Rob6323Go2EnvCfg(DirectRLEnvCfg):
     )
 
     # ============================================
-    # CONTACT SENSOR (detects ground contact)
+    # CONTACT SENSOR
     # ============================================
     contact_sensor: ContactSensorCfg = ContactSensorCfg(
         prim_path="/World/envs/env_.*/Robot/.*",  # Monitor ALL robot body parts for contact
@@ -160,11 +160,12 @@ class Rob6323Go2EnvCfg(DirectRLEnvCfg):
     yaw_rate_reward_scale = 0.5  # Reward for matching target rotation speed
     # Scale = 0.5 means turning is half as important as moving
 
-    # --- Action Smoothness (To be implemented in Tutorial Part 1) ---
+    # --- Action Smoothness (Part 1: COMPLETED) ---
     action_rate_reward_scale = -0.1  # PENALTY for jerky/sudden actions (negative = penalty)
-    # Encourages smooth, continuous movements
-    # Currently defined but NOT USED in baseline
-    # You will implement this in _get_rewards()
+    # Encourages smooth, continuous movements by penalizing:
+    # 1. Large changes between consecutive actions (first derivative)
+    # 2. Sudden acceleration in action changes (second derivative)
+    # Negative scale means this is a penalty, not a reward
 
     # TODO: You will add more reward scales as you progress through tutorial:
     # - Orientation penalty (keep robot level)

@@ -141,6 +141,6 @@ See `rl_class_guidelines.md` in the project root for complete requirements. Key 
 
 ## 7. Code Style & Documentation
 
-- **Comments**: All comments must be in English.
+- **Comments**: All comments must be in English. Check and update the comments once a progress is made.
 - **Documentation**: Add inline comments explaining the *physics* or *logic* behind reward terms.
 - **Variables**: Use clear, descriptive variable names.
