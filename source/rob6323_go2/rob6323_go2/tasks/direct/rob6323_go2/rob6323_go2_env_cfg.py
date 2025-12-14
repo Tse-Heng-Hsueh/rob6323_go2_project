@@ -103,7 +103,11 @@ class Rob6323Go2EnvCfg(DirectRLEnvCfg):
     # PD control gains
     Kp = 20.0  # Proportional gain
     Kd = 0.5   # Derivative gain
-    torque_limits = 100.0  # Max torque
+    # torque_limits = 100.0  # Max torque
+
+    torque_limits = 23.5 
 
     # part 3 - termination
     base_height_min = 0.20  # Terminate if base is lower than 20cm
+
+    torque_reward_scale = -0.0001

@@ -46,7 +46,8 @@ class Rob6323Go2Env(DirectRLEnv):
                 "track_lin_vel_xy_exp",
                 "track_ang_vel_z_exp",
                 "rew_action_rate",     # Added
-                "raibert_heuristic",   # Added (for later Part 4)
+                "raibert_heuristic",   # Added 
+                "rew_torque",
             ]
         }
 
@@ -54,7 +55,9 @@ class Rob6323Go2Env(DirectRLEnv):
         self.Kp = torch.tensor([cfg.Kp] * 12, device=self.device).unsqueeze(0).repeat(self.num_envs, 1)
         self.Kd = torch.tensor([cfg.Kd] * 12, device=self.device).unsqueeze(0).repeat(self.num_envs, 1)
         self.motor_offsets = torch.zeros(self.num_envs, 12, device=self.device)
+        
         self.torque_limits = cfg.torque_limits
+        self._torques = torch.zeros(self.num_envs, 12, device=self.device)
 
         # part 4.2
         # Get specific body indices
@@ -77,7 +80,7 @@ class Rob6323Go2Env(DirectRLEnv):
         self._base_id, _ = self._contact_sensor.find_bodies("base")
         # self._feet_ids, _ = self._contact_sensor.find_bodies(".*foot")
         # self._undesired_contact_body_ids, _ = self._contact_sensor.find_bodies(".*thigh")
-
+        
         # add handle for debug visualization (this is set to a valid handle inside set_debug_vis)
         self.set_debug_vis(self.cfg.debug_vis)
 
@@ -119,6 +122,9 @@ class Rob6323Go2Env(DirectRLEnv):
             -self.torque_limits,
             self.torque_limits,
         )
+
+        # store torques for rewards
+        self._torques = torques
 
         # Apply torques to the robot
         self.robot.set_joint_effort_target(torques)
@@ -170,11 +176,15 @@ class Rob6323Go2Env(DirectRLEnv):
         self.last_actions = torch.roll(self.last_actions, 1, 2)
         self.last_actions[:, :, 0] = self._actions[:]
 
+        # torque magnitude penalty
+        rew_torque = torch.sum(torch.square(self._torques), dim=1)
+
         rewards = {
             "track_lin_vel_xy_exp": lin_vel_error_mapped * self.cfg.lin_vel_reward_scale,   # Removed step_dt
             "track_ang_vel_z_exp": yaw_rate_error_mapped * self.cfg.yaw_rate_reward_scale, # Removed step_dt
             "rew_action_rate": rew_action_rate * self.cfg.action_rate_reward_scale,
             "raibert_heuristic": rew_raibert_heuristic * self.cfg.raibert_heuristic_reward_scale,
+            "rew_torque": rew_torque * self.cfg.torque_reward_scale,
         }
 
         reward = torch.sum(torch.stack(list(rewards.values())), dim=0)
@@ -209,6 +219,8 @@ class Rob6323Go2Env(DirectRLEnv):
             self.episode_length_buf[:] = torch.randint_like(self.episode_length_buf, high=int(self.max_episode_length))
         self._actions[env_ids] = 0.0
         self._previous_actions[env_ids] = 0.0
+
+        self._torques[env_ids] = 0.0
 
         self.last_actions[env_ids] = 0.0
 
