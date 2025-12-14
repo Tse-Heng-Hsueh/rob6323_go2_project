@@ -1,4 +1,5 @@
-# Copyright (c) 2022-2025, The Isaac Lab Project Developers (https://github.com/isaac-sim/IsaacLab/blob/main/CONTRIBUTORS.md).
+# Copyright (c) 2022-2025, The Isaac Lab Project Developers
+# (https://github.com/isaac-sim/IsaacLab/blob/main/CONTRIBUTORS.md).
 # All rights reserved.
 #
 # SPDX-License-Identifier: BSD-3-Clause
@@ -95,7 +96,11 @@ class Rob6323Go2Env(DirectRLEnv):
                 "track_lin_vel_xy_exp",  # Reward for tracking XY velocity commands
                 "track_ang_vel_z_exp",  # Reward for tracking yaw rate command
                 "rew_action_rate",  # Penalty for jerky/sudden actions (Part 1: IMPLEMENTED)
-                "raibert_heuristic",  # Reward for good gait patterns (Part 4: TODO)
+                "raibert_heuristic",  # Reward for good gait patterns (Part 4: IMPLEMENTED)
+                "orient",  # Penalty for body tilt (Part 5: IMPLEMENTED)
+                "lin_vel_z",  # Penalty for vertical velocity (Part 5: IMPLEMENTED)
+                "dof_vel",  # Penalty for high joint velocities (Part 5: IMPLEMENTED)
+                "ang_vel_xy",  # Penalty for body roll/pitch (Part 5: IMPLEMENTED)
             ]
         }
 
@@ -345,29 +350,25 @@ class Rob6323Go2Env(DirectRLEnv):
         self._step_contact_targets()
         rew_raibert_heuristic = self._reward_raibert_heuristic()
 
+        # --- Part 5: Additional Regularization Rewards ---
+
         # 1. Penalize non-vertical orientation (projected gravity on XY plane)
-        # todo: We want the robot to stay upright, so gravity should only project onto Z.
+        # We want the robot to stay upright, so gravity should only project onto Z.
         # Calculate the sum of squares of the X and Y components of projected_gravity_b.
-        rew_orient = (
-            torch.sum(torch.square(self.robot.data.projected_gravity_b[:, :2]), dim=1) * self.cfg.orient_reward_scale
-        )
+        rew_orient = torch.sum(torch.square(self.robot.data.projected_gravity_b[:, :2]), dim=1)
 
         # 2. Penalize vertical velocity (z-component of base linear velocity)
-        # todo: Square the Z component of the base linear velocity.
-        rew_lin_vel_z = (
-            torch.sum(torch.square(self.robot.data.root_lin_vel_b[:, 2]), dim=1)
-            + torch.sum(torch.square(self.robot.data.root_ang_vel_b[:, :2]), dim=1)  # not sure about this
-        ) * self.cfg.lin_vel_z_reward_scale
+        # Square the Z component of the base linear velocity to reduce bouncing.
+        rew_lin_vel_z = torch.square(self.robot.data.root_lin_vel_b[:, 2])
 
         # 3. Penalize high joint velocities
-        # todo: Sum the squares of all joint velocities.
-        rew_dof_vel = torch.sum(torch.square(self.robot.data.joint_vel), dim=1) * self.cfg.dof_vel_reward_scale
+        # Sum the squares of all joint velocities to encourage smooth, natural motion.
+        rew_dof_vel = torch.sum(torch.square(self.robot.data.joint_vel), dim=1)
 
         # 4. Penalize angular velocity in XY plane (roll/pitch)
-        # todo: Sum the squares of the X and Y components of the base angular velocity.
-        rew_ang_vel_xy = (
-            torch.sum(torch.square(self.robot.data.root_ang_vel_b[:, :2]), dim=1) * self.cfg.ang_vel_xy_reward_scale
-        )  # not sure about this
+        # Sum the squares of the X and Y components of the base angular velocity
+        # to minimize body rocking/swaying.
+        rew_ang_vel_xy = torch.sum(torch.square(self.robot.data.root_ang_vel_b[:, :2]), dim=1)
 
         # --- Combine All Rewards ---
         # Scale by reward weights and timestep duration
