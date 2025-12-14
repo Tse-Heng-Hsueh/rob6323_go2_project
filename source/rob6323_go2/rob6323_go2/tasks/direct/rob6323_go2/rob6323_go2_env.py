@@ -108,40 +108,40 @@ class Rob6323Go2Env(DirectRLEnv):
         return observations
 
     def _get_rewards(self) -> torch.Tensor:
-    # linear velocity tracking
-    lin_vel_error = torch.sum(torch.square(self._commands[:, :2] - self.robot.data.root_lin_vel_b[:, :2]), dim=1)
-    lin_vel_error_mapped = torch.exp(-lin_vel_error / 0.25)
+        # linear velocity tracking
+        lin_vel_error = torch.sum(torch.square(self._commands[:, :2] - self.robot.data.root_lin_vel_b[:, :2]), dim=1)
+        lin_vel_error_mapped = torch.exp(-lin_vel_error / 0.25)
 
-    # yaw rate tracking
-    yaw_rate_error = torch.square(self._commands[:, 2] - self.robot.data.root_ang_vel_b[:, 2])
-    yaw_rate_error_mapped = torch.exp(-yaw_rate_error / 0.25)
+        # yaw rate tracking
+        yaw_rate_error = torch.square(self._commands[:, 2] - self.robot.data.root_ang_vel_b[:, 2])
+        yaw_rate_error_mapped = torch.exp(-yaw_rate_error / 0.25)
 
-    # action rate penalization
-    # First derivative (Current - Last)
-    rew_action_rate = torch.sum(torch.square(self._actions - self.last_actions[:, :, 0]), dim=1) * (self.cfg.action_scale ** 2)
-    # Second derivative (Current - 2*Last + 2ndLast)
-    rew_action_rate += torch.sum(
-        torch.square(self._actions - 2 * self.last_actions[:, :, 0] + self.last_actions[:, :, 1]),
-        dim=1,
-    ) * (self.cfg.action_scale ** 2)
+        # action rate penalization
+        # First derivative (Current - Last)
+        rew_action_rate = torch.sum(torch.square(self._actions - self.last_actions[:, :, 0]), dim=1) * (self.cfg.action_scale ** 2)
+        # Second derivative (Current - 2*Last + 2ndLast)
+        rew_action_rate += torch.sum(
+            torch.square(self._actions - 2 * self.last_actions[:, :, 0] + self.last_actions[:, :, 1]),
+            dim=1,
+        ) * (self.cfg.action_scale ** 2)
 
-    # Update the prev action hist (roll buffer and insert new action)
-    self.last_actions = torch.roll(self.last_actions, 1, 2)
-    self.last_actions[:, :, 0] = self._actions[:]
+        # Update the prev action hist (roll buffer and insert new action)
+        self.last_actions = torch.roll(self.last_actions, 1, 2)
+        self.last_actions[:, :, 0] = self._actions[:]
 
-    rewards = {
-        "track_lin_vel_xy_exp": lin_vel_error_mapped * self.cfg.lin_vel_reward_scale,   # Removed step_dt
-        "track_ang_vel_z_exp": yaw_rate_error_mapped * self.cfg.yaw_rate_reward_scale, # Removed step_dt
-        "rew_action_rate": rew_action_rate * self.cfg.action_rate_reward_scale,
-    }
+        rewards = {
+            "track_lin_vel_xy_exp": lin_vel_error_mapped * self.cfg.lin_vel_reward_scale,   # Removed step_dt
+            "track_ang_vel_z_exp": yaw_rate_error_mapped * self.cfg.yaw_rate_reward_scale, # Removed step_dt
+            "rew_action_rate": rew_action_rate * self.cfg.action_rate_reward_scale,
+        }
 
-    reward = torch.sum(torch.stack(list(rewards.values())), dim=0)
+        reward = torch.sum(torch.stack(list(rewards.values())), dim=0)
 
-    # Logging
-    for key, value in rewards.items():
-        self._episode_sums[key] += value
+        # Logging
+        for key, value in rewards.items():
+            self._episode_sums[key] += value
 
-    return reward
+        return reward
 
     def _get_dones(self) -> tuple[torch.Tensor, torch.Tensor]:
         time_out = self.episode_length_buf >= self.max_episode_length - 1
