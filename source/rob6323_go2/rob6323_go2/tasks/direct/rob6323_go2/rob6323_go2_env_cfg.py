@@ -17,6 +17,7 @@ from isaaclab.sensors import ContactSensorCfg
 from isaaclab.markers import VisualizationMarkersCfg
 from isaaclab.markers.config import BLUE_ARROW_X_MARKER_CFG, FRAME_MARKER_CFG, GREEN_ARROW_X_MARKER_CFG
 
+
 @configclass
 class Rob6323Go2EnvCfg(DirectRLEnvCfg):
     # env
@@ -79,3 +80,5 @@ class Rob6323Go2EnvCfg(DirectRLEnvCfg):
     # reward scales
     lin_vel_reward_scale = 1.0
     yaw_rate_reward_scale = 0.5
+
+    action_rate_reward_scale = -0.1  # small reward scale for action rate penalization

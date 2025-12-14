@@ -43,9 +43,22 @@ class Rob6323Go2Env(DirectRLEnv):
             key: torch.zeros(self.num_envs, dtype=torch.float, device=self.device)
             for key in [
                 "track_lin_vel_xy_exp",
-                "track_ang_vel_z_exp"
+                "track_ang_vel_z_exp",
+                "rew_action_rate",  # action rate penalization
+                "raibert_heuristic",  # gait (walking pattern) shaping
             ]
         }
+        # variables needed for action rate penalization
+        # Shape: (num_envs, action_dim, history_length)
+        self.last_actions = torch.zeros(
+            self.num_envs,
+            gym.spaces.flatdim(self.single_action_space),
+            3,
+            dtype=torch.float,
+            device=self.device,
+            requires_grad=False,
+        )
+
         # Get specific body indices
         self._base_id, _ = self._contact_sensor.find_bodies("base")
         # self._feet_ids, _ = self._contact_sensor.find_bodies(".*foot")
@@ -107,7 +120,7 @@ class Rob6323Go2Env(DirectRLEnv):
         # yaw rate tracking
         yaw_rate_error = torch.square(self._commands[:, 2] - self.robot.data.root_ang_vel_b[:, 2])
         yaw_rate_error_mapped = torch.exp(-yaw_rate_error / 0.25)
-        
+
         rewards = {
             "track_lin_vel_xy_exp": lin_vel_error_mapped * self.cfg.lin_vel_reward_scale * self.step_dt,
             "track_ang_vel_z_exp": yaw_rate_error_mapped * self.cfg.yaw_rate_reward_scale * self.step_dt,
@@ -121,7 +134,9 @@ class Rob6323Go2Env(DirectRLEnv):
     def _get_dones(self) -> tuple[torch.Tensor, torch.Tensor]:
         time_out = self.episode_length_buf >= self.max_episode_length - 1
         net_contact_forces = self._contact_sensor.data.net_forces_w_history
-        cstr_termination_contacts = torch.any(torch.max(torch.norm(net_contact_forces[:, :, self._base_id], dim=-1), dim=1)[0] > 1.0, dim=1)
+        cstr_termination_contacts = torch.any(
+            torch.max(torch.norm(net_contact_forces[:, :, self._base_id], dim=-1), dim=1)[0] > 1.0, dim=1
+        )
         cstr_upsidedown = self.robot.data.projected_gravity_b[:, 2] > 0
         died = cstr_termination_contacts | cstr_upsidedown
         return died, time_out
@@ -158,6 +173,9 @@ class Rob6323Go2Env(DirectRLEnv):
         extras["Episode_Termination/base_contact"] = torch.count_nonzero(self.reset_terminated[env_ids]).item()
         extras["Episode_Termination/time_out"] = torch.count_nonzero(self.reset_time_outs[env_ids]).item()
         self.extras["log"].update(extras)
+
+        # Reset last actions history
+        self.last_actions[env_ids] = 0.0
 
     def _set_debug_vis_impl(self, debug_vis: bool):
         # set visibility of markers
