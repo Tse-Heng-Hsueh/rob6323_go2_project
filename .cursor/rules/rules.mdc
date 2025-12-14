@@ -1,0 +1,160 @@
+---
+alwaysApply: true
+---
+# ROB6323 Go2 Locomotion Project - Cursor AI Rules
+
+## Project Overview
+
+This is a reinforcement learning project for NYU ROB6323 course where students train a Unitree Go2 quadruped robot to walk using PPO (Proximal Policy Optimization) in Isaac Lab simulation. The goal is to improve a deliberately weak baseline policy through principled reward shaping, regularization, and robustness strategies.
+
+## Project Goals
+
+See `rl_class_guidelines.md` in the project root for complete requirements. Key objectives include:
+
+### Policy Quality Requirements (60 pts)
+1. **Gait Quality**: Clear walking or trotting gait with periodic footfall patterns
+2. **Base Stability**: Low pitch/roll oscillations, body parallel to ground, reasonable height
+3. **Action Smoothness**: Regularized torques and smooth motions
+4. **Command Following**: Track linear velocities (vx, vy) and yaw rate with low error
+   - Target: `track_lin_vel_xy_exp` ≈ 48, `track_ang_vel_z_exp` ≈ 24 by end of training
+
+### Deliverables
+- Clean, documented codebase with modifications
+- Video demo (20-60 seconds) of best policy
+- Report (2-4 pages) explaining changes and results
+
+### Bonus Tasks (+20 pts)
+- Actuator friction model with randomization (+5 pts, opportunity for real robot testing)
+- New skill in simulation: uneven terrain, bipedal walking, or controlled backflip (+15 pts)
+
+## Critical File Modification Rules
+
+**⚠️ IMPORTANT: Only modify these two files:**
+
+1. `source/rob6323_go2/rob6323_go2/tasks/direct/rob6323_go2/rob6323_go2_env.py`
+   - Environment class implementation
+   - All reward functions, observation logic, termination conditions
+   - PD controller implementation
+   - State management
+
+2. `source/rob6323_go2/rob6323_go2/tasks/direct/rob6323_go2/rob6323_go2_env_cfg.py`
+   - Environment configuration
+   - All reward scales and hyperparameters
+   - Robot configuration (actuators, sensors)
+   - Domain randomization parameters
+
+**DO NOT modify:**
+- `source/rob6323_go2/rob6323_go2/tasks/direct/rob6323_go2/agents/rsl_rl_ppo_cfg.py` (PPO hyperparameters)
+- Any other project files
+- Do NOT create additional helper files or restructure the project
+
+**Why this restriction:**
+- Course grading system expects only these two files to be modified
+- Changes to project structure may break automated evaluation
+- Two files are sufficient for all required functionality
+
+## Tutorial and Resources
+
+### Primary Tutorial
+- Path: `tutorial/tutorial.md`
+- Contains step-by-step implementation guide for Parts 1-6
+- **Note**: Tutorial Parts 5-6 are incomplete and require self-implementation
+
+### Tutorial Coverage Analysis
+
+**✅ Complete (Parts 1-4):**
+- Part 1: Action rate penalties (action smoothing)
+- Part 2: Low-level PD controller implementation
+- Part 3: Early termination (base height threshold)
+- Part 4: Raibert Heuristic for gait shaping
+
+**⚠️ Incomplete (Parts 5-6):**
+- Part 5: Additional reward terms (orient, lin_vel_z, dof_vel, ang_vel_xy) - only hints provided
+- Part 6: Foot clearance and contact force rewards - framework only
+
+**❌ Not Covered in Tutorial:**
+- Torque regularization penalties (required for grading)
+- Domain randomization
+- Terrain randomization
+- Reward weight tuning for target metrics
+- Bonus tasks (friction model, new skills)
+
+### Reference Resources
+
+1. **Project Guidelines**: `rl_class_guidelines.md` (complete requirements)
+2. **Isaac Lab Docs**: https://isaac-sim.github.io/IsaacLab/main/
+3. **Isaac Lab ANYmal C Example**: Similar quadruped locomotion reference (adapt for Go2)
+4. **DMO Paper Go2 Implementation**: 
+   - Legacy IsaacGym code (need to adapt to Isaac Lab)
+   - [Environment](https://github.com/Jogima-cyber/IsaacGymEnvs/blob/e351da69e05e0433e746cef0537b50924fd9fdbf/isaacgymenvs/tasks/go2_terrain.py)
+   - [Config](https://github.com/Jogima-cyber/IsaacGymEnvs/blob/e351da69e05e0433e746cef0537b50924fd9fdbf/isaacgymenvs/cfg/task/Go2Terrain.yaml)
+   - Look at `compute_reward_CaT()` function
+
+### API References
+- `robot.data`: [ArticulationData](https://isaac-sim.github.io/IsaacLab/main/source/api/lab/isaaclab.assets.html#isaaclab.assets.ArticulationData)
+- `_contact_sensor.data`: [ContactSensorData](https://isaac-sim.github.io/IsaacLab/main/source/api/lab/isaaclab.sensors.html#isaaclab.sensors.ContactSensorData)
+
+## Common Pitfalls to Avoid
+
+1. **Index confusion**: 
+   - `self._feet_ids` (from `robot.find_bodies()`) for kinematics
+   - `self._feet_ids_sensor` (from `_contact_sensor.find_bodies()`) for forces
+   - These are DIFFERENT and cannot be mixed
+
+2. **Observation space mismatch**: Update `observation_space` in config when adding clock inputs
+
+3. **Missing logging keys**: Add all reward names to `self._episode_sums` in `__init__()`
+
+4. **PD controller**: Must set `stiffness=0.0, damping=0.0` in actuator config
+
+5. **Reward scale signs**: Most regularization rewards should be negative (penalties)
+
+## Code Style
+
+- All comments must be in English
+- Use clear, descriptive variable names
+- Add inline comments explaining reward term purposes
+- Document any non-obvious calculations (e.g., Raibert heuristic logic)
+
+## AI Assistant Behavior Guidelines
+
+### Working Style
+- **Incremental assistance**: Help the user understand concepts and implement step-by-step following the tutorial, NOT complete the entire project at once
+- **Educational approach**: Explain the reasoning behind implementations, trade-offs, and design decisions
+- **Bug fixing**: Help diagnose and fix issues when they arise
+- **Code review**: Point out potential issues with tensor shapes, indexing, API usage
+
+### Development Environment
+- User may work on **HPC (Greene cluster)** or **local machine**
+- **DO NOT execute programs directly** - provide commands for the user to run
+- **DO NOT run training scripts** - user will handle this via SLURM on cluster
+- Focus on code implementation, explanation, and debugging
+
+### What to Provide
+- ✅ Code snippets for specific tutorial parts
+- ✅ Explanations of reward functions and their effects
+- ✅ Help with PyTorch tensor operations and Isaac Lab API
+- ✅ Debugging assistance for errors
+- ✅ Suggestions for hyperparameter tuning
+
+### What NOT to Do
+- ❌ Implement the entire project in one go
+- ❌ Execute training or testing scripts
+- ❌ Make assumptions about what the user wants to implement next
+- ❌ Modify files other than the two allowed files
+- ❌ Create additional helper modules or restructure the project
+
+## When Assisting with This Project
+
+1. **Always check** if modifications respect the two-file restriction
+2. **Reference** tutorial.md for implementation patterns
+3. **Consult** rl_class_guidelines.md for grading requirements
+4. **Use** Isaac Lab API docs for robot.data and sensor.data access
+5. **Remind** about index differences (robot vs sensor)
+6. **Validate** that observation_space matches actual observation tensor size
+7. **Suggest** appropriate reward scales (very small for regularization terms)
+8. **Keep** implementation within the two allowed files - no external modules
+
+---
+
+This project requires balancing multiple competing reward terms, extensive hyperparameter tuning, and careful debugging of vectorized PyTorch operations. Expect iteration and experimentation.

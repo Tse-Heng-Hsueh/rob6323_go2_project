@@ -69,3 +69,6 @@ tests/
 
 # Docker history
 .isaac-lab-docker-history
+
+# Local IsaacLab clone for code intelligence
+IsaacLab/
