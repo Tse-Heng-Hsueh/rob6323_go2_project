@@ -7,6 +7,7 @@ from isaaclab_assets.robots.unitree import UNITREE_GO2_CFG
 
 import isaaclab.envs.mdp as mdp
 import isaaclab.sim as sim_utils
+from isaaclab.actuators import ImplicitActuatorCfg
 from isaaclab.assets import ArticulationCfg
 from isaaclab.envs import DirectRLEnvCfg
 from isaaclab.scene import InteractiveSceneCfg
@@ -106,6 +107,20 @@ class Rob6323Go2EnvCfg(DirectRLEnvCfg):
     # Load Unitree Go2 robot model (URDF/USD with joints, links, sensors)
     # prim_path uses regex to create one robot per environment: env_0, env_1, ..., env_4095
     robot_cfg: ArticulationCfg = UNITREE_GO2_CFG.replace(prim_path="/World/envs/env_.*/Robot")
+
+    # PD control gains
+    Kp = 20.0  # Proportional gain
+    Kd = 0.5  # Derivative gain
+    torque_limits = 100.0  # Max torque
+
+    # "base_legs" is an arbitrary key we use to group these actuators
+    robot_cfg.actuators["base_legs"] = ImplicitActuatorCfg(
+        joint_names_expr=[".*_hip_joint", ".*_thigh_joint", ".*_calf_joint"],
+        effort_limit=23.5,
+        velocity_limit=30.0,
+        stiffness=0.0,  # CRITICAL: Set to 0 to disable implicit P-gain
+        damping=0.0,  # CRITICAL: Set to 0 to disable implicit D-gain
+    )
 
     # ============================================
     # PARALLEL ENVIRONMENT SETTINGS

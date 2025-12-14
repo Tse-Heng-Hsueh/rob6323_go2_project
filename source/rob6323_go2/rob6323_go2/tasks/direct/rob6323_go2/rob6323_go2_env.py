@@ -58,6 +58,28 @@ class Rob6323Go2Env(DirectRLEnv):
             self.num_envs, gym.spaces.flatdim(self.single_action_space), device=self.device
         )
 
+        # --- PD Controller Parameters (Part 2: IMPLEMENTED) ---
+        # Manual implementation of low-level PD controller for torque control
+        # Instead of using the physics engine's built-in PD controller,
+        # we compute torques explicitly for better control and debugging.
+
+        # Kp (Proportional gain): Shape (num_envs, 12)
+        # Controls how strongly joints push toward target position
+        # Higher Kp → stiffer joints, faster response (but may oscillate)
+        self.Kp = torch.tensor([cfg.Kp] * 12, device=self.device).unsqueeze(0).repeat(self.num_envs, 1)
+
+        # Kd (Derivative gain): Shape (num_envs, 12)
+        # Provides damping to reduce oscillations and overshoot
+        # Higher Kd → more damping, smoother motion (but slower response)
+        self.Kd = torch.tensor([cfg.Kd] * 12, device=self.device).unsqueeze(0).repeat(self.num_envs, 1)
+
+        # Motor offsets: Not used in baseline, but reserved for calibration
+        self.motor_offsets = torch.zeros(self.num_envs, 12, device=self.device)
+
+        # Torque limits: Maximum torque per joint (safety constraint)
+        # Prevents unrealistic forces and simulation instability
+        self.torque_limits = cfg.torque_limits
+
         # --- Velocity Commands ---
         # Shape: (num_envs, 3) where 3 = [vx, vy, yaw_rate]
         # vx: forward/backward velocity, vy: left/right velocity, yaw_rate: rotation speed
@@ -92,10 +114,12 @@ class Rob6323Go2Env(DirectRLEnv):
 
         # --- Body Part Indices ---
         # Get indices of specific body parts for contact detection
-        self._base_id, _ = self._contact_sensor.find_bodies("base")  # Robot's main body/torso
+        self._base_id, _ = self._contact_sensor.find_bodies("base")
+        # Robot's main body/torso
         # self._feet_ids, _ = self._contact_sensor.find_bodies(".*foot")
         # All four feet (to be used later)
-        # self._undesired_contact_body_ids, _ = self._contact_sensor.find_bodies(".*thigh")
+        # self._undesired_contact_body_ids, _ =
+        # self._contact_sensor.find_bodies(".*thigh")
         # Parts that shouldn't touch ground
 
         # --- Debug Visualization ---
@@ -144,7 +168,7 @@ class Rob6323Go2Env(DirectRLEnv):
         """
         Process actions from the policy before physics simulation runs.
 
-        This converts normalized actions (typically in [-1, 1]) into actual joint targets:
+        This converts normalized actions (typically in [-1, 1]) into desired joint positions:
         - Scale actions by action_scale (0.25)
         - Add to default joint positions (standing pose)
 
@@ -154,23 +178,45 @@ class Rob6323Go2Env(DirectRLEnv):
         Args:
             actions: Raw actions from policy, shape (num_envs, 12)
         """
+        # Store raw actions for observation and action rate calculation
         self._actions = actions.clone()
-        # Convert: action offset → absolute joint target position
-        # processed_action = scale * action + default_pose
-        self._processed_actions = self.cfg.action_scale * self._actions + self.robot.data.default_joint_pos
+
+        # Compute desired joint positions from policy actions
+        # Formula: q_desired = action_scale * action + q_default
+        self.desired_joint_pos = self.cfg.action_scale * self._actions + self.robot.data.default_joint_pos
 
     def _apply_action(self) -> None:
         """
-        Send the processed joint targets to the robot's actuators.
+        Apply torque control using manual PD controller (Part 2: IMPLEMENTED).
 
-        This happens after _pre_physics_step() and tells the robot
-        what joint positions to aim for. The robot's PD controllers
-        (or direct position control) will try to reach these targets.
+        This computes joint torques using the classic PD control formula:
+            τ = Kp * (q_desired - q_actual) - Kd * q̇_actual
 
-        Note: In baseline, this uses direct position control.
-              Tutorial Part 2 will modify this to use torque control with PD gains.
+        Where:
+        - Kp (proportional gain): Controls how strongly we push toward target position
+        - Kd (derivative gain): Provides damping to prevent oscillations
+        - q_desired: Target joint positions from _pre_physics_step()
+        - q_actual: Current joint positions from simulation
+        - q̇_actual: Current joint velocities from simulation
+
+        The computed torques are clipped to [−torque_limits, +torque_limits] for safety.
+
+        Why manual PD control instead of built-in?
+        - Full control over gains (Kp, Kd) for fine-tuning
+        - Can add advanced features later (friction compensation, gravity compensation)
+        - Explicit torque limits prevent unrealistic forces
         """
-        self.robot.set_joint_position_target(self._processed_actions)
+        # Compute PD torques using the standard formula
+        # Proportional term: Kp * position_error
+        # Derivative term: -Kd * velocity (acts as damping)
+        torques = torch.clip(
+            (self.Kp * (self.desired_joint_pos - self.robot.data.joint_pos) - self.Kd * self.robot.data.joint_vel),
+            -self.torque_limits,
+            self.torque_limits,
+        )
+
+        # Send computed torques to robot actuators
+        self.robot.set_joint_effort_target(torques)
 
     def _get_observations(self) -> dict:
         """
