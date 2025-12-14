@@ -112,12 +112,38 @@ class Rob6323Go2Env(DirectRLEnv):
             requires_grad=False,
         )
 
+        # --- Gait State Variables (Part 4: IMPLEMENTED) ---
+        # Track gait phase for Raibert Heuristic foot placement guidance
+
+        # Get foot body indices for position tracking
+        self._feet_ids = []
+        foot_names = ["FL_foot", "FR_foot", "RL_foot", "RR_foot"]
+        for name in foot_names:
+            id_list, _ = self.robot.find_bodies(name)
+            self._feet_ids.append(id_list[0])
+
+        # Gait clock: Tracks current phase of walking cycle [0, 1)
+        # Increments each step based on gait frequency (3 Hz)
+        self.gait_indices = torch.zeros(self.num_envs, dtype=torch.float, device=self.device, requires_grad=False)
+
+        # Clock inputs: Sine wave representation of each foot's gait phase
+        # Shape: (num_envs, 4) for 4 feet
+        # Added to observation space so policy knows when each foot should lift/land
+        self.clock_inputs = torch.zeros(self.num_envs, 4, dtype=torch.float, device=self.device, requires_grad=False)
+
+        # Desired contact states: Smooth transition between stance and swing phases
+        # Shape: (num_envs, 4) for 4 feet
+        # Values in [0, 1]: 1 = foot should be on ground, 0 = foot should be in air
+        self.desired_contact_states = torch.zeros(
+            self.num_envs, 4, dtype=torch.float, device=self.device, requires_grad=False
+        )
+
         # --- Body Part Indices ---
         # Get indices of specific body parts for contact detection
         self._base_id, _ = self._contact_sensor.find_bodies("base")
         # Robot's main body/torso
-        # self._feet_ids, _ = self._contact_sensor.find_bodies(".*foot")
         # All four feet (to be used later)
+        # self._feet_ids, _ = self._contact_sensor.find_bodies(".*foot")
         # self._undesired_contact_body_ids, _ =
         # self._contact_sensor.find_bodies(".*thigh")
         # Parts that shouldn't touch ground
@@ -222,7 +248,7 @@ class Rob6323Go2Env(DirectRLEnv):
         """
         Build the observation vector that the policy network sees.
 
-        The observation contains 48 values (all in robot's body frame):
+        The observation contains 52 values (all in robot's body frame):
         - [0:3]   Base linear velocity (vx, vy, vz)
         - [3:6]   Base angular velocity (ωx, ωy, ωz)
         - [6:9]   Projected gravity vector (tells robot its tilt)
@@ -230,9 +256,10 @@ class Rob6323Go2Env(DirectRLEnv):
         - [12:24] Joint positions (offset from default standing pose)
         - [24:36] Joint velocities
         - [36:48] Previous actions (so policy knows what it just did)
+        - [48:52] Clock inputs (gait phase for each of 4 feet) [Part 4: ADDED]
 
         Returns:
-            Dictionary with key "policy" containing the 48D observation tensor
+            Dictionary with key "policy" containing the 52D observation tensor
         """
         # Save current action as previous for next step
         self._previous_actions = self._actions.clone()
@@ -249,6 +276,7 @@ class Rob6323Go2Env(DirectRLEnv):
                     self.robot.data.joint_pos - self.robot.data.default_joint_pos,  # Joint offsets
                     self.robot.data.joint_vel,  # Joint velocities
                     self._actions,  # Previous action
+                    self.clock_inputs,  # Add gait phase info
                 )
                 if tensor is not None
             ],
@@ -261,19 +289,19 @@ class Rob6323Go2Env(DirectRLEnv):
         """
         Compute rewards for the current step - this shapes what the robot learns!
 
-        Current baseline only has 2 reward terms (very weak - you'll add more!):
+        Current reward terms (Parts 1-4):
         1. Linear velocity tracking: Rewards robot for matching target vx, vy speed
         2. Yaw rate tracking: Rewards robot for matching target rotation speed
+        3. Action rate penalty: Penalizes jerky/sudden action changes (Part 1)
+        4. Raibert heuristic penalty: Guides proper foot placement for stable gait (Part 4)
 
-        Reward formula uses exponential mapping:
+        Reward formula uses exponential mapping for tracking:
         - reward = exp(-error / temperature)
         - When error = 0 → reward = 1.0 (perfect)
         - When error is large → reward ≈ 0 (poor tracking)
         - temperature = 0.25 controls how steep the curve is
 
         TODO (from tutorial): Add more rewards like:
-        - Action smoothness penalty (Part 1)
-        - Gait shaping rewards (Part 4)
         - Orientation/height penalties (Part 5)
         - Contact force penalties (Part 6)
 
@@ -308,9 +336,14 @@ class Rob6323Go2Env(DirectRLEnv):
             torch.square(self._actions - 2 * self.last_actions[:, :, 0] + self.last_actions[:, :, 1]), dim=1
         ) * (self.cfg.action_scale**2)
 
-        # Update the prev action hist (roll buffer and insert new action)
+        # Update the action history buffer (roll and insert new action)
         self.last_actions = torch.roll(self.last_actions, 1, 2)
         self.last_actions[:, :, 0] = self._actions[:]
+
+        # --- Raibert Heuristic Reward (Part 4: IMPLEMENTED) ---
+        # Update gait clock and calculate ideal foot placements
+        self._step_contact_targets()
+        rew_raibert_heuristic = self._reward_raibert_heuristic()
 
         # --- Combine All Rewards ---
         # Scale by reward weights and timestep duration
@@ -318,6 +351,8 @@ class Rob6323Go2Env(DirectRLEnv):
             "track_lin_vel_xy_exp": lin_vel_error_mapped * self.cfg.lin_vel_reward_scale,  # Removed step_dt
             "track_ang_vel_z_exp": yaw_rate_error_mapped * self.cfg.yaw_rate_reward_scale,  # Removed step_dt
             "rew_action_rate": rew_action_rate * self.cfg.action_rate_reward_scale,
+            # Note: This reward is negative (penalty) in the config
+            "raibert_heuristic": rew_raibert_heuristic * self.cfg.raibert_heuristic_reward_scale,
         }
         reward = torch.sum(torch.stack(list(rewards.values())), dim=0)
 
@@ -335,14 +370,16 @@ class Rob6323Go2Env(DirectRLEnv):
         1. died: True if robot failed (fell over or base touched ground)
         2. time_out: True if episode reached maximum length
 
-        Termination conditions:
+        Termination conditions (Parts 3):
         - Base contact: Robot's main body touches ground (should walk on feet only!)
         - Upside down: Robot flipped over (gravity points wrong direction)
+        - Base too low: Base height < 0.20m (Part 3: ADDED)
         - Time out: Episode reached 20 seconds
 
         Why terminate on failure?
         - Prevents robot from learning bad behaviors like crawling
         - Encourages staying upright and walking properly
+        - Speeds up training by avoiding useless episode continuation
 
         Returns:
             (died, time_out): Both are boolean tensors of shape (num_envs,)
@@ -363,11 +400,12 @@ class Rob6323Go2Env(DirectRLEnv):
         # When upright, gravity projects as negative Z. If positive → robot flipped!
         cstr_upsidedown = self.robot.data.projected_gravity_b[:, 2] > 0
 
-        # terminate if base is too low
+        # Check if base height is too low (Part 3: IMPLEMENTED)
+        # If robot crouches/collapses below 0.20m, terminate episode
         base_height = self.robot.data.root_pos_w[:, 2]
         cstr_base_height_min = base_height < self.cfg.base_height_min
 
-        # Robot "died" if either failure condition is true
+        # Combine all failure conditions with OR logic
         died = cstr_termination_contacts | cstr_upsidedown | cstr_base_height_min
 
         return died, time_out
@@ -445,6 +483,172 @@ class Rob6323Go2Env(DirectRLEnv):
 
         # Reset action history buffer for action rate calculation
         self.last_actions[env_ids] = 0.0
+
+        # Reset gait clock for Raibert Heuristic (Part 4: IMPLEMENTED)
+        self.gait_indices[env_ids] = 0
+
+    @property
+    def foot_positions_w(self) -> torch.Tensor:
+        """
+        Get current positions of all four feet in world frame.
+
+        Used by Raibert Heuristic to calculate foot placement errors.
+
+        Returns:
+            Foot positions tensor, shape (num_envs, 4, 3) for [FL, FR, RL, RR]
+        """
+        return self.robot.data.body_pos_w[:, self._feet_ids]
+
+    def _step_contact_targets(self):
+        """
+        Update gait clock and compute desired contact states for all feet (Part 4: IMPLEMENTED).
+
+        This function implements a trot gait pattern where diagonal feet move together:
+        - Frequency: 3 Hz (3 steps per second)
+        - Phase offset: 0.5 (50% - diagonal pairs are synchronized)
+        - Duration: 50% stance, 50% swing
+
+        Steps:
+        1. Increment gait clock based on time and frequency
+        2. Calculate phase for each foot (with appropriate offsets for trot gait)
+        3. Convert phases to sine waves (clock_inputs) for observation
+        4. Compute smooth contact transitions using von Mises distribution
+
+        The clock_inputs are added to observations so the policy can learn
+        phase-dependent behaviors (e.g., lift leg during swing phase).
+        """
+        frequencies = 3.0
+        phases = 0.5
+        offsets = 0.0
+        bounds = 0.0
+        durations = 0.5 * torch.ones((self.num_envs,), dtype=torch.float32, device=self.device)
+        self.gait_indices = torch.remainder(self.gait_indices + self.step_dt * frequencies, 1.0)
+
+        foot_indices = [
+            self.gait_indices + phases + offsets + bounds,
+            self.gait_indices + offsets,
+            self.gait_indices + bounds,
+            self.gait_indices + phases,
+        ]
+
+        self.foot_indices = torch.remainder(torch.cat([foot_indices[i].unsqueeze(1) for i in range(4)], dim=1), 1.0)
+
+        for idxs in foot_indices:
+            stance_idxs = torch.remainder(idxs, 1) < durations
+            swing_idxs = torch.remainder(idxs, 1) > durations
+
+            idxs[stance_idxs] = torch.remainder(idxs[stance_idxs], 1) * (0.5 / durations[stance_idxs])
+            idxs[swing_idxs] = 0.5 + (torch.remainder(idxs[swing_idxs], 1) - durations[swing_idxs]) * (
+                0.5 / (1 - durations[swing_idxs])
+            )
+
+        self.clock_inputs[:, 0] = torch.sin(2 * math.pi * foot_indices[0])
+        self.clock_inputs[:, 1] = torch.sin(2 * math.pi * foot_indices[1])
+        self.clock_inputs[:, 2] = torch.sin(2 * math.pi * foot_indices[2])
+        self.clock_inputs[:, 3] = torch.sin(2 * math.pi * foot_indices[3])
+
+        # von mises distribution
+        kappa = 0.07
+        smoothing_cdf_start = torch.distributions.normal.Normal(
+            0, kappa
+        ).cdf  # (x) + torch.distributions.normal.Normal(1, kappa).cdf(x)) / 2
+
+        smoothing_multiplier_FL = smoothing_cdf_start(torch.remainder(foot_indices[0], 1.0)) * (
+            1 - smoothing_cdf_start(torch.remainder(foot_indices[0], 1.0) - 0.5)
+        ) + smoothing_cdf_start(torch.remainder(foot_indices[0], 1.0) - 1) * (
+            1 - smoothing_cdf_start(torch.remainder(foot_indices[0], 1.0) - 0.5 - 1)
+        )
+        smoothing_multiplier_FR = smoothing_cdf_start(torch.remainder(foot_indices[1], 1.0)) * (
+            1 - smoothing_cdf_start(torch.remainder(foot_indices[1], 1.0) - 0.5)
+        ) + smoothing_cdf_start(torch.remainder(foot_indices[1], 1.0) - 1) * (
+            1 - smoothing_cdf_start(torch.remainder(foot_indices[1], 1.0) - 0.5 - 1)
+        )
+        smoothing_multiplier_RL = smoothing_cdf_start(torch.remainder(foot_indices[2], 1.0)) * (
+            1 - smoothing_cdf_start(torch.remainder(foot_indices[2], 1.0) - 0.5)
+        ) + smoothing_cdf_start(torch.remainder(foot_indices[2], 1.0) - 1) * (
+            1 - smoothing_cdf_start(torch.remainder(foot_indices[2], 1.0) - 0.5 - 1)
+        )
+        smoothing_multiplier_RR = smoothing_cdf_start(torch.remainder(foot_indices[3], 1.0)) * (
+            1 - smoothing_cdf_start(torch.remainder(foot_indices[3], 1.0) - 0.5)
+        ) + smoothing_cdf_start(torch.remainder(foot_indices[3], 1.0) - 1) * (
+            1 - smoothing_cdf_start(torch.remainder(foot_indices[3], 1.0) - 0.5 - 1)
+        )
+
+        self.desired_contact_states[:, 0] = smoothing_multiplier_FL
+        self.desired_contact_states[:, 1] = smoothing_multiplier_FR
+        self.desired_contact_states[:, 2] = smoothing_multiplier_RL
+        self.desired_contact_states[:, 3] = smoothing_multiplier_RR
+
+    def _reward_raibert_heuristic(self):
+        """
+        Calculate Raibert Heuristic reward for proper foot placement (Part 4: IMPLEMENTED).
+
+        This reward guides the robot to place its feet at ideal locations based on
+        the classic Raibert Heuristic for stable legged locomotion.
+
+        Algorithm:
+        1. Get current foot positions in world frame
+        2. Transform to body frame (so positions are relative to robot's orientation)
+        3. Calculate nominal foot positions (default standing stance)
+        4. Apply Raibert offsets based on commanded velocity:
+           - Forward velocity → feet should land further forward
+           - Yaw velocity → adjust lateral foot positions for turning
+        5. Compute error between actual and ideal foot positions
+        6. Return squared error as penalty (lower error = better gait)
+
+        Physical intuition:
+        - When running forward, you naturally place feet ahead of your body
+        - When turning, outer feet sweep wider than inner feet
+        - This reward teaches the robot these natural movement patterns
+
+        Returns:
+            Penalty (squared error) for each environment, shape (num_envs,)
+        """
+        cur_footsteps_translated = self.foot_positions_w - self.robot.data.root_pos_w.unsqueeze(1)
+        footsteps_in_body_frame = torch.zeros(self.num_envs, 4, 3, device=self.device)
+        for i in range(4):
+            footsteps_in_body_frame[:, i, :] = math_utils.quat_apply_yaw(
+                math_utils.quat_conjugate(self.robot.data.root_quat_w), cur_footsteps_translated[:, i, :]
+            )
+
+        # nominal positions: [FR, FL, RR, RL]
+        desired_stance_width = 0.25
+        desired_ys_nom = torch.tensor(
+            [desired_stance_width / 2, -desired_stance_width / 2, desired_stance_width / 2, -desired_stance_width / 2],
+            device=self.device,
+        ).unsqueeze(0)
+
+        desired_stance_length = 0.45
+        desired_xs_nom = torch.tensor(
+            [
+                desired_stance_length / 2,
+                desired_stance_length / 2,
+                -desired_stance_length / 2,
+                -desired_stance_length / 2,
+            ],
+            device=self.device,
+        ).unsqueeze(0)
+
+        # raibert offsets
+        phases = torch.abs(1.0 - (self.foot_indices * 2.0)) * 1.0 - 0.5
+        frequencies = torch.tensor([3.0], device=self.device)
+        x_vel_des = self._commands[:, 0:1]
+        yaw_vel_des = self._commands[:, 2:3]
+        y_vel_des = yaw_vel_des * desired_stance_length / 2
+        desired_ys_offset = phases * y_vel_des * (0.5 / frequencies.unsqueeze(1))
+        desired_ys_offset[:, 2:4] *= -1
+        desired_xs_offset = phases * x_vel_des * (0.5 / frequencies.unsqueeze(1))
+
+        desired_ys_nom = desired_ys_nom + desired_ys_offset
+        desired_xs_nom = desired_xs_nom + desired_xs_offset
+
+        desired_footsteps_body_frame = torch.cat((desired_xs_nom.unsqueeze(2), desired_ys_nom.unsqueeze(2)), dim=2)
+
+        err_raibert_heuristic = torch.abs(desired_footsteps_body_frame - footsteps_in_body_frame[:, :, 0:2])
+
+        reward = torch.sum(torch.square(err_raibert_heuristic), dim=(1, 2))
+
+        return reward
 
     def _set_debug_vis_impl(self, debug_vis: bool):
         """

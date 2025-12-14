@@ -58,8 +58,18 @@ class Rob6323Go2EnvCfg(DirectRLEnvCfg):
     action_space = 12  # 12D action: 3 joints per leg × 4 legs
     # Actions represent OFFSETS from default standing pose
 
-    observation_space = 48  # 48D observation vector (see _get_observations() for breakdown)
-    # Contains: velocities, orientation, commands, joint states, previous actions
+    observation_space = 52  # 52D observation vector (Part 4: UPDATED from 48 to 52)
+    # Contains: velocities, orientation, commands, joint states, previous actions, clock inputs
+    # Added 4D clock inputs for gait phase information (Part 4)
+
+    # --- Gait Shaping Rewards (Part 4: IMPLEMENTED) ---
+    raibert_heuristic_reward_scale = -10.0  # Penalty for deviation from ideal foot placement
+    # Guides robot to place feet at positions suggested by Raibert Heuristic
+    # Negative scale = penalty (minimize foot placement error)
+
+    # --- Future Rewards (Part 6: TODO) ---
+    feet_clearance_reward_scale = -30.0  # Penalty for not lifting feet during swing
+    tracking_contacts_shaped_force_reward_scale = 4.0  # Reward for proper contact forces
 
     state_space = 0  # Not used in this project (for centralized training in multi-agent RL)
 
@@ -118,11 +128,13 @@ class Rob6323Go2EnvCfg(DirectRLEnvCfg):
         joint_names_expr=[".*_hip_joint", ".*_thigh_joint", ".*_calf_joint"],
         effort_limit=23.5,
         velocity_limit=30.0,
-        stiffness=0.0,  # CRITICAL: Set to 0 to disable implicit P-gain
-        damping=0.0,  # CRITICAL: Set to 0 to disable implicit D-gain
+        stiffness=0.0,  # CRITICAL: Set to 0 to disable implicit P-gain (Part 2)
+        damping=0.0,  # CRITICAL: Set to 0 to disable implicit D-gain (Part 2)
     )
 
-    base_height_min = 0.20  # Terminate if base is lower than 20cm
+    # --- Termination Thresholds (Part 3: IMPLEMENTED) ---
+    base_height_min = 0.20  # Terminate episode if base drops below 20cm
+    # Prevents robot from learning to crawl or collapse
 
     # ============================================
     # PARALLEL ENVIRONMENT SETTINGS
@@ -177,18 +189,17 @@ class Rob6323Go2EnvCfg(DirectRLEnvCfg):
     yaw_rate_reward_scale = 0.5  # Reward for matching target rotation speed
     # Scale = 0.5 means turning is half as important as moving
 
-    # --- Action Smoothness (Part 1: COMPLETED) ---
-    action_rate_reward_scale = -0.1  # PENALTY for jerky/sudden actions (negative = penalty)
+    # --- Action Smoothness (Part 1: IMPLEMENTED) ---
+    action_rate_reward_scale = -0.1  # Penalty for jerky/sudden actions
     # Encourages smooth, continuous movements by penalizing:
     # 1. Large changes between consecutive actions (first derivative)
     # 2. Sudden acceleration in action changes (second derivative)
-    # Negative scale means this is a penalty, not a reward
 
-    # TODO: You will add more reward scales as you progress through tutorial:
+    # --- Future Reward Scales (Parts 5-6: TODO) ---
+    # You will add more reward scales as you progress through tutorial:
     # - Orientation penalty (keep robot level)
-    # - Base height penalty (don't crouch too low)
+    # - Vertical velocity penalty (reduce bouncing)
     # - Joint velocity penalty (don't move joints too fast)
+    # - Angular velocity penalty (minimize roll/pitch)
     # - Torque penalty (don't use excessive force)
-    # - Contact force penalty (feet should touch gently)
-    # - Gait shaping rewards (encourage trot/pace patterns)
-    # - Foot clearance rewards (lift feet properly)
+    # - Contact force penalties (feet should touch gently)
