@@ -204,8 +204,12 @@ class Rob6323Go2EnvCfg(DirectRLEnvCfg):
     # - Torque penalty (don't use excessive force)
     # - Contact force penalties (feet should touch gently)
 
-    # Additional reward scales
-    orient_reward_scale = -5.0
-    lin_vel_z_reward_scale = -0.02
-    dof_vel_reward_scale = -0.0001
-    ang_vel_xy_reward_scale = -0.001
+    # Additional reward scales (Part 5: IMPLEMENTED)
+    orient_reward_scale = -5.0  # Penalty for body tilt
+    lin_vel_z_reward_scale = -0.02  # Penalty for vertical velocity
+    dof_vel_reward_scale = -0.0001  # Penalty for high joint velocities
+    ang_vel_xy_reward_scale = -0.001  # Penalty for body roll/pitch
+
+    # Advanced Foot Interaction Rewards (Part 6)
+    feet_clearance_reward_scale = -30.0  # Penalty for not lifting feet during swing
+    tracking_contacts_shaped_force_reward_scale = 4.0  # Reward for proper contact forces

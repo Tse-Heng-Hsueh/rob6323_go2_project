@@ -143,6 +143,19 @@ class Rob6323Go2Env(DirectRLEnv):
             self.num_envs, 4, dtype=torch.float, device=self.device, requires_grad=False
         )
 
+        # Part 6: Advanced Foot Interaction Rewards
+        # 1. Find indices in the ROBOT (for positions/kinematics)
+        self._feet_ids = []
+        for name in foot_names:
+            id_list, _ = self.robot.find_bodies(name)
+            self._feet_ids.append(id_list[0])
+
+        # Find indices in the CONTACT SENSOR (for forces)
+        self._feet_ids_sensor = []
+        for name in foot_names:
+            id_list, _ = self._contact_sensor.find_bodies(name)
+            self._feet_ids_sensor.append(id_list[0])
+
         # --- Body Part Indices ---
         # Get indices of specific body parts for contact detection
         self._base_id, _ = self._contact_sensor.find_bodies("base")
