@@ -48,6 +48,10 @@ class Rob6323Go2Env(DirectRLEnv):
                 "rew_action_rate",     # Added
                 "raibert_heuristic",   # Added 
                 "rew_torque",
+                "orient",  
+                "lin_vel_z",  
+                "dof_vel",  
+                "ang_vel_xy",  
             ]
         }
 
