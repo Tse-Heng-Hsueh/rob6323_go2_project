@@ -101,7 +101,7 @@ class Rob6323Go2Env(DirectRLEnv):
                 "track_ang_vel_z_exp",  # Reward for tracking yaw rate command
                 "rew_action_rate",  # Penalty for jerky/sudden actions (Part 1: IMPLEMENTED)
                 "raibert_heuristic",  # Reward for good gait patterns (Part 4: IMPLEMENTED)
-                # "rew_torque",  # TODO: Re-enable after baseline validation
+                "rew_torque",  # Penalty for high torque usage (course requirement)
                 "orient",  # Penalty for body tilt (Part 5: IMPLEMENTED)
                 "lin_vel_z",  # Penalty for vertical velocity (Part 5: IMPLEMENTED)
                 "dof_vel",  # Penalty for high joint velocities (Part 5: IMPLEMENTED)
@@ -415,11 +415,8 @@ class Rob6323Go2Env(DirectRLEnv):
             self.torque_limits,
         )
 
-        # Store torques for reward calculation
+        # Store torques for reward calculation (used by torque penalty)
         self._torques = torques
-
-        # Store torques for reward calculation (TODO: Re-enable when adding torque penalty)
-        # self._torques = torques
 
         # Send computed torques to robot actuators
         self.robot.set_joint_effort_target(torques)
@@ -546,9 +543,9 @@ class Rob6323Go2Env(DirectRLEnv):
         rew_ang_vel_xy = torch.sum(torch.square(self.robot.data.root_ang_vel_b[:, :2]), dim=1)
 
         # 5. Penalize high torque usage (energy efficiency)
-        # TODO: Re-enable after baseline validation (course requirement)
-        # rew_torque = torch.sum(torch.square(self._torques), dim=1)
-        # rew_torque = torch.zeros(self.num_envs, device=self.device)  # Placeholder
+        # This encourages the robot to use minimal force for smooth, energy-efficient motion.
+        # Formula: sum of squared torques across all 12 joints
+        rew_torque = torch.sum(torch.square(self._torques), dim=1)
 
         # --- Part 6: Advanced Foot Interaction Rewards ---
         # Calculate foot clearance and contact force rewards
@@ -563,7 +560,7 @@ class Rob6323Go2Env(DirectRLEnv):
             "rew_action_rate": rew_action_rate * self.cfg.action_rate_reward_scale,
             # Note: This reward is negative (penalty) in the config
             "raibert_heuristic": rew_raibert_heuristic * self.cfg.raibert_heuristic_reward_scale,
-            # "rew_torque": rew_torque * self.cfg.torque_reward_scale,  # TODO: Re-enable after baseline
+            "rew_torque": rew_torque * self.cfg.torque_reward_scale,  # Penalty for high torque
             "orient": rew_orient * self.cfg.orient_reward_scale,
             "lin_vel_z": rew_lin_vel_z * self.cfg.lin_vel_z_reward_scale,
             "dof_vel": rew_dof_vel * self.cfg.dof_vel_reward_scale,
@@ -583,7 +580,7 @@ class Rob6323Go2Env(DirectRLEnv):
                     rewards["track_ang_vel_z_exp"],
                     rewards["rew_action_rate"],
                     rewards["raibert_heuristic"],
-                    # rewards["rew_torque"],  # TODO: Re-enable after baseline
+                    rewards["rew_torque"],
                     rewards["orient"],
                     rewards["lin_vel_z"],
                     rewards["dof_vel"],

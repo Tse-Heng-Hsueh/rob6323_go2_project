@@ -215,4 +215,4 @@ class Rob6323Go2EnvCfg(DirectRLEnvCfg):
     lin_vel_z_reward_scale = -0.02  # Penalty for vertical velocity
     dof_vel_reward_scale = -0.0001  # Penalty for high joint velocities
     ang_vel_xy_reward_scale = -0.001  # Penalty for body roll/pitch
-    # torque_reward_scale = -0.0001  # TODO: Re-enable after baseline validation (course requirement)
+    torque_reward_scale = -0.0001  # Penalty for high torque usage (energy efficiency, course requirement)
