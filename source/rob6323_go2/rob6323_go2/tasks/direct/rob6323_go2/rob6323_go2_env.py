@@ -126,30 +126,51 @@ class Rob6323Go2Env(DirectRLEnv):
 
 
     def _apply_action(self) -> None:
-        # PD torque (unclipped)
-        tau_pd = (
-            self.Kp * (self.desired_joint_pos - self.robot.data.joint_pos)
-            - self.Kd * self.robot.data.joint_vel
+        # Compute PD torques
+        torques = torch.clip(
+            (
+                self.Kp * (
+                    self.desired_joint_pos 
+                    - self.robot.data.joint_pos 
+                )
+                - self.Kd * self.robot.data.joint_vel
+            ),
+            -self.torque_limits,
+            self.torque_limits,
         )
 
-        qd = self.robot.data.joint_vel  # (N,12)
-
-        # friction torque: Fs*tanh(qd/0.1) + mu_v*qd
-        tau_stiction = self._F_s * torch.tanh(qd / 0.1)   # (N,1)->(N,12) broadcast
-        tau_viscous  = self._mu_v * qd
-        tau_friction = tau_stiction + tau_viscous
-
-        # subtract friction from PD torque
-        tau = tau_pd - tau_friction
-
-        # clip to motor limits
-        tau = torch.clip(tau, -self.torque_limits, self.torque_limits)
-
-        # store torques for rewards/logging
-        self._torques = tau
+        # store torques for rewards
+        self._torques = torques
 
         # Apply torques to the robot
-        self.robot.set_joint_effort_target(tau)
+        self.robot.set_joint_effort_target(torques)
+     
+    # # bonus
+    # def _apply_action(self) -> None:
+    #     # PD torque (unclipped)
+    #     tau_pd = (
+    #         self.Kp * (self.desired_joint_pos - self.robot.data.joint_pos)
+    #         - self.Kd * self.robot.data.joint_vel
+    #     )
+
+    #     qd = self.robot.data.joint_vel  # (N,12)
+
+    #     # friction torque: Fs*tanh(qd/0.1) + mu_v*qd
+    #     tau_stiction = self._F_s * torch.tanh(qd / 0.1)   # (N,1)->(N,12) broadcast
+    #     tau_viscous  = self._mu_v * qd
+    #     tau_friction = tau_stiction + tau_viscous
+
+    #     # subtract friction from PD torque
+    #     tau = tau_pd - tau_friction
+
+    #     # clip to motor limits
+    #     tau = torch.clip(tau, -self.torque_limits, self.torque_limits)
+
+    #     # store torques for rewards/logging
+    #     self._torques = tau
+
+    #     # Apply torques to the robot
+    #     self.robot.set_joint_effort_target(tau)
 
 
     def _get_observations(self) -> dict:
@@ -219,29 +240,67 @@ class Rob6323Go2Env(DirectRLEnv):
         # Hint: Sum the squares of the X and Y components of the base angular velocity.
         rew_ang_vel_xy =  torch.sum(torch.square(self.robot.data.root_ang_vel_b[:, :2]), dim=1)
 
-        # Part 6: Foot interaction rewards
-        # Use desired_contact_states as a soft stance mask in [0,1]
-        stance_mask = self.desired_contact_states                    # (N,4)
-        swing_mask = 1.0 - self.desired_contact_states               # (N,4)
+        # # Part 6: Foot interaction rewards
+        # # Use desired_contact_states as a soft stance mask in [0,1]
+        # stance_mask = self.desired_contact_states                    # (N,4)
+        # swing_mask = 1.0 - self.desired_contact_states               # (N,4)
 
-        # (a) Foot clearance: encourage feet to lift during swing
-        # foot heights (world z)
-        foot_z = self.foot_positions_w[:, :, 2]                      # (N,4)
-        target = getattr(self.cfg, "foot_clearance_target", 0.08)
-        # penalize if foot is below target during swing
-        rew_feet_clearance = torch.sum(swing_mask * torch.square(torch.relu(target - foot_z)), dim=1)
+        # # (a) Foot clearance: encourage feet to lift during swing
+        # # foot heights (world z)
+        # foot_z = self.foot_positions_w[:, :, 2]                      # (N,4)
+        # target = getattr(self.cfg, "foot_clearance_target", 0.08)
+        # # penalize if foot is below target during swing
+        # rew_feet_clearance = torch.sum(swing_mask * torch.square(torch.relu(target - foot_z)), dim=1)
 
-        # (b) Contact force shaping: reward force during stance, penalize during swing
-        forces_w = self._contact_sensor.data.net_forces_w            # (N,B,3)
-        foot_forces = forces_w[:, self._feet_ids_sensor, :]          # (N,4,3)
-        force_norm = torch.linalg.norm(foot_forces, dim=-1)          # (N,4)
+        # # (b) Contact force shaping: reward force during stance, penalize during swing
+        # forces_w = self._contact_sensor.data.net_forces_w            # (N,B,3)
+        # foot_forces = forces_w[:, self._feet_ids_sensor, :]          # (N,4,3)
+        # force_norm = torch.linalg.norm(foot_forces, dim=-1)          # (N,4)
 
-        k = getattr(self.cfg, "contact_force_scale", 50.0)
-        # shaped in [0,1): small force -> ~0, large force -> ~1
-        force_shaped = 1.0 - torch.exp(-force_norm / k)
+        # k = getattr(self.cfg, "contact_force_scale", 50.0)
+        # # shaped in [0,1): small force -> ~0, large force -> ~1
+        # force_shaped = 1.0 - torch.exp(-force_norm / k)
 
-        rew_tracking_contacts = torch.sum(stance_mask * force_shaped - swing_mask * force_shaped, dim=1)    
- 
+        # rew_tracking_contacts = torch.sum(stance_mask * force_shaped - swing_mask * force_shaped, dim=1)    
+        
+        # revised - Part 6: Foot interaction rewards
+        # (A) phases = 1 - abs(1 - clip((foot_indices*2 - 1), 0, 1)*2)
+        # requires self.foot_indices computed in _step_contact_targets()
+        phases = 1.0 - torch.abs(
+            1.0 - torch.clip((self.foot_indices * 2.0) - 1.0, 0.0, 1.0) * 2.0
+        )  # (N,4)
+
+        # foot height (world z)
+        foot_height = self.foot_positions_w[:, :, 2].view(self.num_envs, -1)  # (N,4)
+
+        # target height = 0.08*phases + 0.02 (offset for foot radius 2cm)
+        target_height = 0.08 * phases + 0.02  # (N,4)
+
+        # only penalize during swing: (1 - desired_contact_states)
+        rew_foot_clearance = torch.square(target_height - foot_height) * (1.0 - self.desired_contact_states)  # (N,4)
+        rew_feet_clearance = torch.sum(rew_foot_clearance, dim=1)  # (N,)
+
+        # (B) contact forces on feet
+        forces_w = self._contact_sensor.data.net_forces_w  # (N, B, 3)
+        foot_forces_w = forces_w[:, self._feet_ids_sensor, :]  # (N,4,3)
+        foot_forces = torch.norm(foot_forces_w, dim=-1)  # (N,4)
+
+        desired_contact = self.desired_contact_states  # (N,4)
+
+        # reimplement original loop:
+        # rew += -(1 - desired_contact[i]) * (1 - exp(- foot_forces[i]^2 / 100))
+        rew_tracking_contacts_shaped_force = torch.zeros(self.num_envs, device=self.device)
+        for i in range(4):
+            rew_tracking_contacts_shaped_force += - (1.0 - desired_contact[:, i]) * (
+                1.0 - torch.exp(-1.0 * (foot_forces[:, i] ** 2) / 100.0)
+            )
+
+        # average over 4 feet 
+        rew_tracking_contacts_shaped_force = rew_tracking_contacts_shaped_force / 4.0
+
+        rew_tracking_contacts = rew_tracking_contacts_shaped_force
+
+
         rewards = {
             "track_lin_vel_xy_exp": lin_vel_error_mapped * self.cfg.lin_vel_reward_scale,   # Removed step_dt
             "track_ang_vel_z_exp": yaw_rate_error_mapped * self.cfg.yaw_rate_reward_scale, # Removed step_dt
@@ -298,9 +357,9 @@ class Rob6323Go2Env(DirectRLEnv):
         # part 4 
         self.gait_indices[env_ids] = 0.0
 
-        # BONUS: randomize friction params per-episode for these envs
-        self._mu_v[env_ids] = torch.empty(len(env_ids), 1, device=self.device).uniform_(0.0, 0.3)
-        self._F_s[env_ids]  = torch.empty(len(env_ids), 1, device=self.device).uniform_(0.0, 2.5)
+        # # BONUS: randomize friction params per-episode for these envs
+        # self._mu_v[env_ids] = torch.empty(len(env_ids), 1, device=self.device).uniform_(0.0, 0.3)
+        # self._F_s[env_ids]  = torch.empty(len(env_ids), 1, device=self.device).uniform_(0.0, 2.5)
 
 
         # Sample new commands
