@@ -124,53 +124,53 @@ class Rob6323Go2Env(DirectRLEnv):
         # Compute desired joint positions from policy actions
         self.desired_joint_pos = self.cfg.action_scale * self._actions + self.robot.data.default_joint_pos
 
-
-    def _apply_action(self) -> None:
-        # Compute PD torques
-        torques = torch.clip(
-            (
-                self.Kp * (
-                    self.desired_joint_pos 
-                    - self.robot.data.joint_pos 
-                )
-                - self.Kd * self.robot.data.joint_vel
-            ),
-            -self.torque_limits,
-            self.torque_limits,
-        )
-
-        # store torques for rewards
-        self._torques = torques
-
-        # Apply torques to the robot
-        self.robot.set_joint_effort_target(torques)
-     
-    # # bonus
+    # # without bonus
     # def _apply_action(self) -> None:
-    #     # PD torque (unclipped)
-    #     tau_pd = (
-    #         self.Kp * (self.desired_joint_pos - self.robot.data.joint_pos)
-    #         - self.Kd * self.robot.data.joint_vel
+    #     # Compute PD torques
+    #     torques = torch.clip(
+    #         (
+    #             self.Kp * (
+    #                 self.desired_joint_pos 
+    #                 - self.robot.data.joint_pos 
+    #             )
+    #             - self.Kd * self.robot.data.joint_vel
+    #         ),
+    #         -self.torque_limits,
+    #         self.torque_limits,
     #     )
 
-    #     qd = self.robot.data.joint_vel  # (N,12)
-
-    #     # friction torque: Fs*tanh(qd/0.1) + mu_v*qd
-    #     tau_stiction = self._F_s * torch.tanh(qd / 0.1)   # (N,1)->(N,12) broadcast
-    #     tau_viscous  = self._mu_v * qd
-    #     tau_friction = tau_stiction + tau_viscous
-
-    #     # subtract friction from PD torque
-    #     tau = tau_pd - tau_friction
-
-    #     # clip to motor limits
-    #     tau = torch.clip(tau, -self.torque_limits, self.torque_limits)
-
-    #     # store torques for rewards/logging
-    #     self._torques = tau
+    #     # store torques for rewards
+    #     self._torques = torques
 
     #     # Apply torques to the robot
-    #     self.robot.set_joint_effort_target(tau)
+    #     self.robot.set_joint_effort_target(torques)
+     
+    # bonus
+    def _apply_action(self) -> None:
+        # PD torque (unclipped)
+        tau_pd = (
+            self.Kp * (self.desired_joint_pos - self.robot.data.joint_pos)
+            - self.Kd * self.robot.data.joint_vel
+        )
+
+        qd = self.robot.data.joint_vel  # (N,12)
+
+        # friction torque: Fs*tanh(qd/0.1) + mu_v*qd
+        tau_stiction = self._F_s * torch.tanh(qd / 0.1)   # (N,1)->(N,12) broadcast
+        tau_viscous  = self._mu_v * qd
+        tau_friction = tau_stiction + tau_viscous
+
+        # subtract friction from PD torque
+        tau = tau_pd - tau_friction
+
+        # clip to motor limits
+        tau = torch.clip(tau, -self.torque_limits, self.torque_limits)
+
+        # store torques for rewards/logging
+        self._torques = tau
+
+        # Apply torques to the robot
+        self.robot.set_joint_effort_target(tau)
 
 
     def _get_observations(self) -> dict:
@@ -357,9 +357,9 @@ class Rob6323Go2Env(DirectRLEnv):
         # part 4 
         self.gait_indices[env_ids] = 0.0
 
-        # # BONUS: randomize friction params per-episode for these envs
-        # self._mu_v[env_ids] = torch.empty(len(env_ids), 1, device=self.device).uniform_(0.0, 0.3)
-        # self._F_s[env_ids]  = torch.empty(len(env_ids), 1, device=self.device).uniform_(0.0, 2.5)
+        # BONUS: randomize friction params per-episode for these envs
+        self._mu_v[env_ids] = torch.empty(len(env_ids), 1, device=self.device).uniform_(0.0, 0.3)
+        self._F_s[env_ids]  = torch.empty(len(env_ids), 1, device=self.device).uniform_(0.0, 2.5)
 
 
         # Sample new commands
