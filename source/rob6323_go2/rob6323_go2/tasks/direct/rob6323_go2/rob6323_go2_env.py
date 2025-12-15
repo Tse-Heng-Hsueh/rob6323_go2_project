@@ -186,6 +186,144 @@ class Rob6323Go2Env(DirectRLEnv):
         # Setup velocity visualization arrows (green=target, blue=actual)
         self.set_debug_vis(self.cfg.debug_vis)
 
+        # --- TensorBoard Text Logging ---
+        # Flag to ensure we only write config once
+        self._config_logged = False
+
+    def _log_experiment_config_to_tensorboard(self):
+        """
+        WARNING: TEMPORARY DEBUG CODE - REMOVE AFTER DEBUGGING PHASE
+
+        Log experiment configuration to TensorBoard for tracking parameter changes
+        across training runs. This is a temporary debugging feature to diagnose
+        performance regressions and should be removed once debugging is complete.
+
+        TODO: Remove this function after identifying and fixing performance issues.
+        """
+        if self._config_logged:
+            return
+
+        # Build clean configuration summary (no emojis, no subjective judgments)
+        config_text = "ROB6323 Go2 Training Configuration\n"
+        config_text += "=" * 80 + "\n\n"
+
+        # PD Controller Parameters
+        config_text += "PD CONTROLLER\n"
+        config_text += "-" * 40 + "\n"
+        config_text += f"  Kp: {self.cfg.Kp}\n"
+        config_text += f"  Kd: {self.cfg.Kd}\n"
+        config_text += f"  Torque Limit: {self.cfg.torque_limits} Nm\n\n"
+
+        # Reward Weights
+        config_text += "REWARD WEIGHTS\n"
+        config_text += "-" * 40 + "\n"
+        config_text += f"  lin_vel_reward_scale: {self.cfg.lin_vel_reward_scale}\n"
+        config_text += f"  yaw_rate_reward_scale: {self.cfg.yaw_rate_reward_scale}\n"
+        config_text += f"  action_rate_reward_scale: {self.cfg.action_rate_reward_scale}\n"
+        config_text += f"  raibert_heuristic_reward_scale: {self.cfg.raibert_heuristic_reward_scale}\n"
+        config_text += f"  orient_reward_scale: {self.cfg.orient_reward_scale}\n"
+        config_text += f"  lin_vel_z_reward_scale: {self.cfg.lin_vel_z_reward_scale}\n"
+        config_text += f"  dof_vel_reward_scale: {self.cfg.dof_vel_reward_scale}\n"
+        config_text += f"  ang_vel_xy_reward_scale: {self.cfg.ang_vel_xy_reward_scale}\n"
+        config_text += f"  feet_clearance_reward_scale: {self.cfg.feet_clearance_reward_scale}\n"
+        config_text += "  tracking_contacts_shaped_force_reward_scale: "
+        config_text += f"{self.cfg.tracking_contacts_shaped_force_reward_scale}\n\n"
+
+        # Termination Conditions
+        config_text += "TERMINATION CONDITIONS\n"
+        config_text += "-" * 40 + "\n"
+        config_text += f"  base_height_min: {self.cfg.base_height_min} m\n"
+        config_text += f"  max_episode_length: {self.max_episode_length} steps\n\n"
+
+        # Environment Settings
+        config_text += "ENVIRONMENT\n"
+        config_text += "-" * 40 + "\n"
+        config_text += f"  num_envs: {self.num_envs}\n"
+        config_text += f"  control_frequency: {1.0 / self.step_dt:.0f} Hz\n"
+        config_text += f"  observation_space: {self.cfg.observation_space}D\n"
+        config_text += f"  action_space: {self.cfg.action_space}D\n"
+        config_text += f"  action_scale: {self.cfg.action_scale}\n\n"
+
+        # Implementation Notes
+        config_text += "NOTES\n"
+        config_text += "-" * 40 + "\n"
+        config_text += "  Part 6 reimplemented using IsaacGymEnvs logic with IsaacLab API\n"
+        config_text += "  Dynamic target height: 0.02-0.10m based on gait phase\n"
+        config_text += "  Contact penalty: Single-sided (F^2/100 shaping)\n"
+        config_text += "=" * 80 + "\n"
+
+        # Try to log to TensorBoard if writer is available
+        try:
+            if hasattr(self, "writer") and self.writer is not None:
+                self.writer.add_text("Config/Experiment_Setup", config_text, 0)
+                print("[INFO] Experiment configuration logged to TensorBoard")
+        except Exception:
+            # Silently fail if TensorBoard writer is not available
+            pass
+
+        self._config_logged = True
+
+    def log_final_metrics_summary(self, iteration: int):
+        """
+        WARNING: TEMPORARY DEBUG CODE - REMOVE AFTER DEBUGGING PHASE
+
+        Log training metrics summary to TensorBoard (optional, not called automatically).
+        This is a temporary debugging feature for manual inspection.
+
+        TODO: Remove this function after debugging phase is complete.
+
+        Args:
+            iteration: Current training iteration number
+        """
+        # Build clean metrics summary (no emojis, no subjective judgments)
+        summary_text = f"Training Metrics Summary (Iteration {iteration})\n"
+        summary_text += "=" * 80 + "\n\n"
+
+        # Get metrics from episode_sums (averaged in extras["log"])
+        if hasattr(self, "extras") and "log" in self.extras:
+            metrics = self.extras["log"]
+
+            summary_text += "PRIMARY TRACKING\n"
+            summary_text += "-" * 40 + "\n"
+            if "Episode_Reward/track_lin_vel_xy_exp" in metrics:
+                val = metrics["Episode_Reward/track_lin_vel_xy_exp"]
+                summary_text += f"  track_lin_vel_xy_exp: {val:.2f}\n"
+            if "Episode_Reward/track_ang_vel_z_exp" in metrics:
+                val = metrics["Episode_Reward/track_ang_vel_z_exp"]
+                summary_text += f"  track_ang_vel_z_exp: {val:.2f}\n"
+
+            summary_text += "\nGAIT QUALITY\n"
+            summary_text += "-" * 40 + "\n"
+            if "Episode_Reward/rew_action_rate" in metrics:
+                summary_text += f"  rew_action_rate: {metrics['Episode_Reward/rew_action_rate']:.2f}\n"
+            if "Episode_Reward/raibert_heuristic" in metrics:
+                summary_text += f"  raibert_heuristic: {metrics['Episode_Reward/raibert_heuristic']:.2f}\n"
+            if "Episode_Reward/feet_clearance" in metrics:
+                summary_text += f"  feet_clearance: {metrics['Episode_Reward/feet_clearance']:.2f}\n"
+            if "Episode_Reward/tracking_contacts_shaped_force" in metrics:
+                val = metrics["Episode_Reward/tracking_contacts_shaped_force"]
+                summary_text += f"  tracking_contacts_shaped_force: {val:.2f}\n"
+
+            summary_text += "\nSTABILITY\n"
+            summary_text += "-" * 40 + "\n"
+            if "Episode_Termination/base_contact" in metrics:
+                val = metrics["Episode_Termination/base_contact"]
+                summary_text += f"  base_contact_terminations: {val:.0f}\n"
+            for key in ["orient", "lin_vel_z", "ang_vel_xy"]:
+                metric_key = f"Episode_Reward/{key}"
+                if metric_key in metrics:
+                    summary_text += f"  {key}: {metrics[metric_key]:.4f}\n"
+
+        summary_text += "=" * 80 + "\n"
+
+        # Log to TensorBoard if available
+        try:
+            if hasattr(self, "writer") and self.writer is not None:
+                self.writer.add_text("Summary/Final_Metrics", summary_text, iteration)
+                print("[INFO] Final metrics summary logged to TensorBoard")
+        except Exception:
+            pass
+
     def _setup_scene(self):
         """
         Build the simulation scene before training starts.
@@ -530,6 +668,10 @@ class Rob6323Go2Env(DirectRLEnv):
         - Timeout: Episode finished, ready for new commands
         - Initial setup: All environments start with random timing
         """
+        # Log experiment configuration on first reset (to TensorBoard)
+        if not self._config_logged:
+            self._log_experiment_config_to_tensorboard()
+
         # Handle "reset all" case
         if env_ids is None or len(env_ids) == self.num_envs:
             env_ids = self.robot._ALL_INDICES
