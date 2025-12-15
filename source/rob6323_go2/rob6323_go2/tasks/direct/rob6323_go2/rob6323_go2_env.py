@@ -65,6 +65,10 @@ class Rob6323Go2Env(DirectRLEnv):
         self.torque_limits = cfg.torque_limits
         self._torques = torch.zeros(self.num_envs, 12, device=self.device)
 
+        # BONUS: actuator friction params (per-env, randomized each episode)
+        self._mu_v = torch.zeros(self.num_envs, 1, device=self.device)  # viscous coeff (N,1)
+        self._F_s  = torch.zeros(self.num_envs, 1, device=self.device)  # stiction coeff (N,1)
+
         # part 4.2
         # Get specific body indices
         self._feet_ids = []
@@ -122,24 +126,31 @@ class Rob6323Go2Env(DirectRLEnv):
 
 
     def _apply_action(self) -> None:
-        # Compute PD torques
-        torques = torch.clip(
-            (
-                self.Kp * (
-                    self.desired_joint_pos 
-                    - self.robot.data.joint_pos 
-                )
-                - self.Kd * self.robot.data.joint_vel
-            ),
-            -self.torque_limits,
-            self.torque_limits,
+        # PD torque (unclipped)
+        tau_pd = (
+            self.Kp * (self.desired_joint_pos - self.robot.data.joint_pos)
+            - self.Kd * self.robot.data.joint_vel
         )
 
-        # store torques for rewards
-        self._torques = torques
+        qd = self.robot.data.joint_vel  # (N,12)
+
+        # friction torque: Fs*tanh(qd/0.1) + mu_v*qd
+        tau_stiction = self._F_s * torch.tanh(qd / 0.1)   # (N,1)->(N,12) broadcast
+        tau_viscous  = self._mu_v * qd
+        tau_friction = tau_stiction + tau_viscous
+
+        # subtract friction from PD torque
+        tau = tau_pd - tau_friction
+
+        # clip to motor limits
+        tau = torch.clip(tau, -self.torque_limits, self.torque_limits)
+
+        # store torques for rewards/logging
+        self._torques = tau
 
         # Apply torques to the robot
-        self.robot.set_joint_effort_target(torques)
+        self.robot.set_joint_effort_target(tau)
+
 
     def _get_observations(self) -> dict:
         self._previous_actions = self._actions.clone()
@@ -286,6 +297,11 @@ class Rob6323Go2Env(DirectRLEnv):
 
         # part 4 
         self.gait_indices[env_ids] = 0.0
+
+        # BONUS: randomize friction params per-episode for these envs
+        self._mu_v[env_ids] = torch.empty(len(env_ids), 1, device=self.device).uniform_(0.0, 0.3)
+        self._F_s[env_ids]  = torch.empty(len(env_ids), 1, device=self.device).uniform_(0.0, 2.5)
+
 
         # Sample new commands
         self._commands[env_ids] = torch.zeros_like(self._commands[env_ids]).uniform_(-1.0, 1.0)
