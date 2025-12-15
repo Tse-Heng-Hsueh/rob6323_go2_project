@@ -107,6 +107,7 @@ class Rob6323Go2Env(DirectRLEnv):
                 "debug_contact_force_magnitude",  # Raw foot contact force (should be >0 when touching ground)
                 "debug_desired_contact_states",  # Should oscillate between 0 and 1 based on gait phase
                 "debug_is_in_contact",  # Binary: 1 if force > threshold, 0 otherwise
+                "debug_all_body_forces",  # Sum of ALL body forces (verify sensor works at all)
             ]
         }
 
@@ -150,14 +151,21 @@ class Rob6323Go2Env(DirectRLEnv):
         )
 
         # Part 6: Advanced Foot Interaction Rewards
-        # Find feet indices in the CONTACT SENSOR using regex (like ANYmal)
+        # Find feet indices in the CONTACT SENSOR
         # Note: _feet_ids for kinematics is already defined above (line 124-128)
-        self._feet_ids_sensor, _ = self._contact_sensor.find_bodies(".*_foot")
+        # Use exact names (same as robot) because regex ".*_foot" may not match
+        self._feet_ids_sensor = []
+        for name in foot_names:
+            id_list, _ = self._contact_sensor.find_bodies(name)
+            self._feet_ids_sensor.append(id_list[0])
 
         # Initialize debug variables for tensorboard logging
         self._debug_contact_force_magnitude = torch.zeros(self.num_envs, device=self.device)
         self._debug_desired_contact_states = torch.zeros(self.num_envs, device=self.device)
         self._debug_is_in_contact = torch.zeros(self.num_envs, device=self.device)
+        # Additional debug: track all body forces to verify sensor is working
+        self._debug_all_body_forces = torch.zeros(self.num_envs, device=self.device)
+        self._debug_num_feet_ids_sensor = len(self._feet_ids_sensor)  # Should be 4
 
         # --- Body Part Indices ---
         # Get indices of specific body parts for contact detection
@@ -191,6 +199,8 @@ class Rob6323Go2Env(DirectRLEnv):
 
         # Create contact sensor to detect which body parts touch ground
         self._contact_sensor = ContactSensor(self.cfg.contact_sensor)
+        # CRITICAL: Register sensor in scene so it gets updated each step!
+        self.scene.sensors["contact_sensor"] = self._contact_sensor
 
         # Create terrain (flat ground plane in baseline)
         self.cfg.terrain.num_envs = self.scene.cfg.num_envs
@@ -409,6 +419,7 @@ class Rob6323Go2Env(DirectRLEnv):
             "debug_contact_force_magnitude": self._debug_contact_force_magnitude,
             "debug_desired_contact_states": self._debug_desired_contact_states,
             "debug_is_in_contact": self._debug_is_in_contact,
+            "debug_all_body_forces": self._debug_all_body_forces,
         }
         reward = torch.sum(
             torch.stack(
@@ -860,6 +871,11 @@ class Rob6323Go2Env(DirectRLEnv):
         self._debug_contact_force_magnitude = torch.sum(force_magnitude, dim=1)  # Sum of 4 feet forces
         self._debug_desired_contact_states = torch.sum(self.desired_contact_states, dim=1)  # Sum of desired
         self._debug_is_in_contact = torch.sum(is_in_contact, dim=1)  # Count of feet in contact (0-4)
+
+        # Additional debug: sum ALL body forces to verify sensor is working at all
+        all_forces = self._contact_sensor.data.net_forces_w  # Shape: (num_envs, num_bodies, 3)
+        all_force_magnitudes = torch.norm(all_forces, dim=-1)  # Shape: (num_envs, num_bodies)
+        self._debug_all_body_forces = torch.sum(all_force_magnitudes, dim=1)  # Sum across all bodies
 
         return total_reward
 
