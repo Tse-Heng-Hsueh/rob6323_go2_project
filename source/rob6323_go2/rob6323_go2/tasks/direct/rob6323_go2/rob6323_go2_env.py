@@ -101,6 +101,8 @@ class Rob6323Go2Env(DirectRLEnv):
                 "lin_vel_z",  # Penalty for vertical velocity (Part 5: IMPLEMENTED)
                 "dof_vel",  # Penalty for high joint velocities (Part 5: IMPLEMENTED)
                 "ang_vel_xy",  # Penalty for body roll/pitch (Part 5: IMPLEMENTED)
+                "feet_clearance",  # Penalty for not lifting feet during swing (Part 6: IMPLEMENTED)
+                "tracking_contacts_shaped_force",  # Reward for proper contact forces (Part 6: IMPLEMENTED)
             ]
         }
 
@@ -378,6 +380,11 @@ class Rob6323Go2Env(DirectRLEnv):
         # to minimize body rocking/swaying.
         rew_ang_vel_xy = torch.sum(torch.square(self.robot.data.root_ang_vel_b[:, :2]), dim=1)
 
+        # --- Part 6: Advanced Foot Interaction Rewards ---
+        # Calculate foot clearance and contact force rewards
+        rew_feet_clearance = self._reward_feet_clearance()
+        rew_contact_forces = self._reward_tracking_contacts_shaped_force()
+
         # --- Combine All Rewards ---
         # Scale by reward weights and timestep duration
         rewards = {
@@ -390,6 +397,8 @@ class Rob6323Go2Env(DirectRLEnv):
             "lin_vel_z": rew_lin_vel_z * self.cfg.lin_vel_z_reward_scale,
             "dof_vel": rew_dof_vel * self.cfg.dof_vel_reward_scale,
             "ang_vel_xy": rew_ang_vel_xy * self.cfg.ang_vel_xy_reward_scale,
+            "feet_clearance": rew_feet_clearance * self.cfg.feet_clearance_reward_scale,
+            "tracking_contacts_shaped_force": rew_contact_forces * self.cfg.tracking_contacts_shaped_force_reward_scale,
         }
         reward = torch.sum(torch.stack(list(rewards.values())), dim=0)
 
@@ -686,6 +695,133 @@ class Rob6323Go2Env(DirectRLEnv):
         reward = torch.sum(torch.square(err_raibert_heuristic), dim=(1, 2))
 
         return reward
+
+    def _reward_feet_clearance(self):
+        """
+        Penalize feet not lifting high enough during swing phase (Part 6: IMPLEMENTED).
+
+        This reward encourages the robot to lift its feet sufficiently during the swing
+        phase of the gait, preventing dragging feet along the ground which would cause:
+        - Increased friction and energy consumption
+        - Unstable gait patterns
+        - Difficulty navigating obstacles
+
+        Physical intuition:
+        - During swing phase (foot in air), we want feet lifted at least 5cm above ground
+        - During stance phase (foot on ground), we don't penalize low height
+        - This creates a clear "lift and place" motion rather than "shuffle and drag"
+
+        Algorithm:
+        1. Get current foot heights from world positions
+        2. Determine which feet are in swing phase (foot_indices > 0.5)
+        3. For swing feet, calculate how far below target height (5cm) they are
+        4. Apply quadratic penalty for feet below threshold
+        5. Weight penalty by swing phase intensity (smooth transition)
+
+        Returns:
+            Penalty (non-negative) for each environment, shape (num_envs,)
+            Higher values = feet not lifted enough during swing
+        """
+        # Step 1: Get foot heights (Z coordinate) in world frame
+        # foot_positions_w shape: (num_envs, 4, 3) where 3 = [x, y, z]
+        # We extract z (height) for all 4 feet
+        foot_heights = self.foot_positions_w[:, :, 2]  # Shape: (num_envs, 4)
+
+        # Step 2: Determine swing phase magnitude
+        # foot_indices ranges from 0 to 1:
+        # - [0.0, 0.5]: Stance phase (foot on ground)
+        # - [0.5, 1.0]: Swing phase (foot in air)
+        # We compute how much each foot is in swing (0 = fully stance, 1 = fully swing)
+        swing_mask = torch.clamp(2 * (self.foot_indices - 0.5), min=0.0, max=1.0)  # Shape: (num_envs, 4)
+        # Example: foot_indices=0.3 → swing_mask=0 (stance, no penalty)
+        #          foot_indices=0.7 → swing_mask=0.4 (40% swing)
+        #          foot_indices=0.9 → swing_mask=0.8 (80% swing)
+
+        # Step 3: Calculate clearance error
+        # Target: feet should be at least 5cm (0.05m) above ground during swing
+        # We measure height relative to terrain origin (assumes flat ground)
+        target_clearance = self.cfg.feet_target_clearance_height  # meters
+
+        # Get terrain height at each robot's position
+        # For flat ground, this is just the z-coordinate of terrain origin
+        terrain_heights = self._terrain.env_origins[:, 2].unsqueeze(1)  # Shape: (num_envs, 1)
+
+        # Calculate actual clearance (how high above ground)
+        actual_clearance = foot_heights - terrain_heights  # Shape: (num_envs, 4)
+
+        # Calculate clearance deficit (how much below target)
+        # If foot is above target → deficit is negative (clamped to 0, no penalty)
+        # If foot is below target → deficit is positive (apply penalty)
+        clearance_deficit = target_clearance - actual_clearance  # Shape: (num_envs, 4)
+        clearance_deficit = torch.clamp(clearance_deficit, min=0.0)  # Only penalize when below target
+
+        # Step 4: Compute weighted penalty
+        # Square the deficit for stronger penalty when far below target
+        # Multiply by swing_mask so we only penalize during swing phase
+        penalty_per_foot = torch.square(clearance_deficit) * swing_mask  # Shape: (num_envs, 4)
+
+        # Step 5: Sum penalty across all 4 feet
+        total_penalty = torch.sum(penalty_per_foot, dim=1)  # Shape: (num_envs,)
+
+        return total_penalty
+
+    def _reward_tracking_contacts_shaped_force(self):
+        """
+        Reward feet applying proper contact forces during stance phase (Part 6: IMPLEMENTED).
+
+        This reward encourages the robot to:
+        - Push forcefully against the ground during stance phase (for propulsion)
+        - Minimize contact during swing phase (feet should be in air)
+        - Maintain consistent ground contact timing aligned with gait
+
+        Physical intuition:
+        - During stance, feet should apply significant vertical force (supporting body weight)
+        - During swing, feet should apply zero force (not touching ground)
+        - Proper force application → efficient locomotion and stable gait
+
+        This is the "opposite" of foot clearance:
+        - Clearance penalizes low feet during swing
+        - This rewards high forces during stance
+
+        Algorithm:
+        1. Get contact forces from sensor (uses _feet_ids_sensor)
+        2. Calculate force magnitude for each foot
+        3. Weight forces by desired contact state (high during stance, low during swing)
+        4. Return sum as positive reward
+
+        Returns:
+            Reward (non-negative) for each environment, shape (num_envs,)
+            Higher values = better force application during stance
+        """
+        # Step 1: Get contact forces from sensor
+        # Must use _feet_ids_sensor (NOT _feet_ids)
+        # _contact_sensor.data.net_forces_w has its own indexing system!
+        # Shape: (num_envs, num_sensor_bodies, 3) where 3 = [fx, fy, fz]
+        contact_forces = self._contact_sensor.data.net_forces_w[:, self._feet_ids_sensor, :]
+        # After indexing: Shape (num_envs, 4, 3) for 4 feet
+
+        # Step 2: Calculate force magnitude (L2 norm of force vector)
+        # We care about total force magnitude, not individual components
+        force_magnitude = torch.norm(contact_forces, dim=-1)  # Shape: (num_envs, 4)
+
+        # Step 3: Weight by desired contact state
+        # desired_contact_states (computed in _step_contact_targets) ranges [0, 1]:
+        # - 1.0: Foot should be fully in contact (stance phase)
+        # - 0.0: Foot should not be in contact (swing phase)
+        # This provides smooth transitions rather than hard binary switches
+
+        # Reward = force × expected_contact
+        # When foot SHOULD be on ground (desired=1.0) AND force is high → large reward
+        # When foot SHOULD be in air (desired=0.0) → reward is zero regardless of force
+        weighted_forces = force_magnitude * self.desired_contact_states  # Shape: (num_envs, 4)
+
+        # Alternative interpretation: We're measuring "alignment" between
+        # actual contact forces and desired contact pattern
+
+        # Step 4: Sum reward across all 4 feet
+        total_reward = torch.sum(weighted_forces, dim=1)  # Shape: (num_envs,)
+
+        return total_reward
 
     def _set_debug_vis_impl(self, debug_vis: bool):
         """

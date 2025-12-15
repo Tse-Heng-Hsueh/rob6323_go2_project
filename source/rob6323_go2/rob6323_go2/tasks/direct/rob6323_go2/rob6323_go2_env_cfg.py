@@ -70,6 +70,7 @@ class Rob6323Go2EnvCfg(DirectRLEnvCfg):
     # --- Future Rewards (Part 6: TODO) ---
     feet_clearance_reward_scale = -30.0  # Penalty for not lifting feet during swing
     tracking_contacts_shaped_force_reward_scale = 4.0  # Reward for proper contact forces
+    feet_target_clearance_height = 0.05  # Target clearance height in meters for feet clearance reward
 
     state_space = 0  # Not used in this project (for centralized training in multi-agent RL)
 
