@@ -153,6 +153,16 @@ class Rob6323Go2Env(DirectRLEnv):
             id_list, _ = self._contact_sensor.find_bodies(name)
             self._feet_ids_sensor.append(id_list[0])
 
+        # Debug: Verify sensor indices are correct
+        # Print this info ONLY for first environment to avoid spam
+        if self.num_envs > 0:
+            print(f"\n[ContactSensor Debug Info]")
+            print(f"  Robot body _feet_ids (for positions): {self._feet_ids}")
+            print(f"  Sensor body _feet_ids_sensor (for forces): {self._feet_ids_sensor}")
+            print(f"  Total sensor bodies tracked: {len(self._contact_sensor.body_names)}")
+            print(f"  Sensor body names (first 10): {self._contact_sensor.body_names[:10]}")
+            print(f"  Foot names in sensor: {[self._contact_sensor.body_names[i] for i in self._feet_ids_sensor]}\n")
+
         # --- Body Part Indices ---
         # Get indices of specific body parts for contact detection
         self._base_id, _ = self._contact_sensor.find_bodies("base")
@@ -804,22 +814,30 @@ class Rob6323Go2Env(DirectRLEnv):
         # We care about total force magnitude, not individual components
         force_magnitude = torch.norm(contact_forces, dim=-1)  # Shape: (num_envs, 4)
 
-        # Step 3: Weight by desired contact state
+        # Step 3: Normalize force magnitude
+        # Typical contact force for a quadruped is ~weight/4 per leg
+        # Go2 weighs ~12kg → ~30N per leg during stance
+        # We normalize to get values in reasonable range [0, ~1]
+        # A threshold of 1.0N ensures we detect actual contact (not sensor noise)
+        force_threshold = 1.0  # Minimum force to count as "in contact" (N)
+        is_in_contact = (force_magnitude > force_threshold).float()  # Shape: (num_envs, 4)
+
+        # Step 4: Compare actual contact with desired contact state
         # desired_contact_states (computed in _step_contact_targets) ranges [0, 1]:
-        # - 1.0: Foot should be fully in contact (stance phase)
-        # - 0.0: Foot should not be in contact (swing phase)
-        # This provides smooth transitions rather than hard binary switches
+        # - Close to 1.0: Foot should be in contact (stance phase)
+        # - Close to 0.0: Foot should not be in contact (swing phase)
+        #
+        # Reward when actual contact MATCHES desired contact:
+        # - Stance phase (desired≈1) + foot on ground (actual=1) → reward = 1*1 = 1 ✓
+        # - Stance phase (desired≈1) + foot in air (actual=0) → reward = 1*0 = 0 ✗
+        # - Swing phase (desired≈0) + foot in air (actual=0) → reward = 0*0 = 0 (neutral)
+        # - Swing phase (desired≈0) + foot on ground (actual=1) → reward = 0*1 = 0 (neutral)
+        #
+        # This formulation rewards proper stance-phase contact
+        contact_reward_per_foot = is_in_contact * self.desired_contact_states  # Shape: (num_envs, 4)
 
-        # Reward = force × expected_contact
-        # When foot SHOULD be on ground (desired=1.0) AND force is high → large reward
-        # When foot SHOULD be in air (desired=0.0) → reward is zero regardless of force
-        weighted_forces = force_magnitude * self.desired_contact_states  # Shape: (num_envs, 4)
-
-        # Alternative interpretation: We're measuring "alignment" between
-        # actual contact forces and desired contact pattern
-
-        # Step 4: Sum reward across all 4 feet
-        total_reward = torch.sum(weighted_forces, dim=1)  # Shape: (num_envs,)
+        # Step 5: Sum reward across all 4 feet
+        total_reward = torch.sum(contact_reward_per_foot, dim=1)  # Shape: (num_envs,)
 
         return total_reward
 

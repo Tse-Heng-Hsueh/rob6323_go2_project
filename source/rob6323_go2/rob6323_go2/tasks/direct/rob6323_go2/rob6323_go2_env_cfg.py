@@ -157,6 +157,8 @@ class Rob6323Go2EnvCfg(DirectRLEnvCfg):
         update_period=0.005,  # Update every physics step (200 Hz)
         track_air_time=True,  # Track how long each foot is in the air
         # Useful for gait analysis and foot clearance rewards
+        # Note: filter_prim_paths_expr is NOT used because prim_path matches multiple bodies
+        # According to ContactSensorCfg docs, filtering only works for single primitives
     )
 
     # ============================================
