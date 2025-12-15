@@ -102,6 +102,7 @@ class Rob6323Go2EnvCfg(DirectRLEnvCfg):
     dof_vel_reward_scale = -0.0001
     ang_vel_xy_reward_scale = -0.001
 
+    # part 6
     feet_clearance_reward_scale = -30.0
     tracking_contacts_shaped_force_reward_scale = 4.0
 
