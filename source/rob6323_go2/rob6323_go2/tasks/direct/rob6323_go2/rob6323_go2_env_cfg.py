@@ -134,8 +134,9 @@ class Rob6323Go2EnvCfg(DirectRLEnvCfg):
     )
 
     # --- Termination Thresholds (Part 3: IMPLEMENTED) ---
-    base_height_min = 0.20  # Terminate episode if base drops below 20cm
-    # Prevents robot from learning to crawl or collapse
+    base_height_min = 0.05  # Terminate episode if base drops below 5cm
+    # Prevents robot from learning to crawl or collapse completely
+    # (Changed from 0.20m to 0.05m per TA's recommendation for more flexible training)
 
     # ============================================
     # PARALLEL ENVIRONMENT SETTINGS
