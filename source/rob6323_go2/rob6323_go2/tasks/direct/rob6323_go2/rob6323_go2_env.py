@@ -103,6 +103,10 @@ class Rob6323Go2Env(DirectRLEnv):
                 "ang_vel_xy",  # Penalty for body roll/pitch (Part 5: IMPLEMENTED)
                 "feet_clearance",  # Penalty for not lifting feet during swing (Part 6: IMPLEMENTED)
                 "tracking_contacts_shaped_force",  # Reward for proper contact forces (Part 6: IMPLEMENTED)
+                # Debug metrics for Part 6 (output raw values to tensorboard)
+                "debug_contact_force_magnitude",  # Raw foot contact force (should be >0 when touching ground)
+                "debug_desired_contact_states",  # Should oscillate between 0 and 1 based on gait phase
+                "debug_is_in_contact",  # Binary: 1 if force > threshold, 0 otherwise
             ]
         }
 
@@ -146,22 +150,14 @@ class Rob6323Go2Env(DirectRLEnv):
         )
 
         # Part 6: Advanced Foot Interaction Rewards
-        # Find indices in the CONTACT SENSOR (for forces)
+        # Find feet indices in the CONTACT SENSOR using regex (like ANYmal)
         # Note: _feet_ids for kinematics is already defined above (line 124-128)
-        self._feet_ids_sensor = []
-        for name in foot_names:
-            id_list, _ = self._contact_sensor.find_bodies(name)
-            self._feet_ids_sensor.append(id_list[0])
+        self._feet_ids_sensor, _ = self._contact_sensor.find_bodies(".*_foot")
 
-        # Debug: Verify sensor indices are correct
-        # Print this info ONLY for first environment to avoid spam
-        if self.num_envs > 0:
-            print(f"\n[ContactSensor Debug Info]")
-            print(f"  Robot body _feet_ids (for positions): {self._feet_ids}")
-            print(f"  Sensor body _feet_ids_sensor (for forces): {self._feet_ids_sensor}")
-            print(f"  Total sensor bodies tracked: {len(self._contact_sensor.body_names)}")
-            print(f"  Sensor body names (first 10): {self._contact_sensor.body_names[:10]}")
-            print(f"  Foot names in sensor: {[self._contact_sensor.body_names[i] for i in self._feet_ids_sensor]}\n")
+        # Initialize debug variables for tensorboard logging
+        self._debug_contact_force_magnitude = torch.zeros(self.num_envs, device=self.device)
+        self._debug_desired_contact_states = torch.zeros(self.num_envs, device=self.device)
+        self._debug_is_in_contact = torch.zeros(self.num_envs, device=self.device)
 
         # --- Body Part Indices ---
         # Get indices of specific body parts for contact detection
@@ -409,8 +405,28 @@ class Rob6323Go2Env(DirectRLEnv):
             "ang_vel_xy": rew_ang_vel_xy * self.cfg.ang_vel_xy_reward_scale,
             "feet_clearance": rew_feet_clearance * self.cfg.feet_clearance_reward_scale,
             "tracking_contacts_shaped_force": rew_contact_forces * self.cfg.tracking_contacts_shaped_force_reward_scale,
+            # Debug metrics (scale=1.0 to see raw values in tensorboard)
+            "debug_contact_force_magnitude": self._debug_contact_force_magnitude,
+            "debug_desired_contact_states": self._debug_desired_contact_states,
+            "debug_is_in_contact": self._debug_is_in_contact,
         }
-        reward = torch.sum(torch.stack(list(rewards.values())), dim=0)
+        reward = torch.sum(
+            torch.stack(
+                [
+                    rewards["track_lin_vel_xy_exp"],
+                    rewards["track_ang_vel_z_exp"],
+                    rewards["rew_action_rate"],
+                    rewards["raibert_heuristic"],
+                    rewards["orient"],
+                    rewards["lin_vel_z"],
+                    rewards["dof_vel"],
+                    rewards["ang_vel_xy"],
+                    rewards["feet_clearance"],
+                    rewards["tracking_contacts_shaped_force"],
+                ]
+            ),
+            dim=0,
+        )  # Exclude debug metrics from actual reward sum
 
         # --- Logging ---
         # Accumulate rewards for tensorboard tracking
@@ -838,6 +854,12 @@ class Rob6323Go2Env(DirectRLEnv):
 
         # Step 5: Sum reward across all 4 feet
         total_reward = torch.sum(contact_reward_per_foot, dim=1)  # Shape: (num_envs,)
+
+        # Store debug info for tensorboard logging
+        # Sum across all feet; mean across envs will be taken later in logging
+        self._debug_contact_force_magnitude = torch.sum(force_magnitude, dim=1)  # Sum of 4 feet forces
+        self._debug_desired_contact_states = torch.sum(self.desired_contact_states, dim=1)  # Sum of desired
+        self._debug_is_in_contact = torch.sum(is_in_contact, dim=1)  # Count of feet in contact (0-4)
 
         return total_reward
 
