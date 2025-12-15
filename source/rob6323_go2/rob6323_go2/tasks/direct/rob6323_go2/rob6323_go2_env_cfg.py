@@ -70,7 +70,8 @@ class Rob6323Go2EnvCfg(DirectRLEnvCfg):
     # --- Future Rewards (Part 6: TODO) ---
     feet_clearance_reward_scale = -30.0  # Penalty for not lifting feet during swing
     tracking_contacts_shaped_force_reward_scale = 4.0  # Reward for proper contact forces
-    feet_target_clearance_height = 0.05  # Target clearance height in meters for feet clearance reward
+    feet_target_clearance_height = 0.08  # Target clearance height in meters (8cm for better obstacle avoidance)
+    contact_force_scale = 50.0  # Scaling factor for exponential contact force shaping
 
     state_space = 0  # Not used in this project (for centralized training in multi-agent RL)
 
@@ -122,7 +123,7 @@ class Rob6323Go2EnvCfg(DirectRLEnvCfg):
     # PD control gains
     Kp = 20.0  # Proportional gain
     Kd = 0.5  # Derivative gain
-    torque_limits = 100.0  # Max torque
+    torque_limits = 23.5  # Max torque (realistic Go2 hardware limit)
 
     # "base_legs" is an arbitrary key we use to group these actuators
     robot_cfg.actuators["base_legs"] = ImplicitActuatorCfg(
@@ -213,7 +214,4 @@ class Rob6323Go2EnvCfg(DirectRLEnvCfg):
     lin_vel_z_reward_scale = -0.02  # Penalty for vertical velocity
     dof_vel_reward_scale = -0.0001  # Penalty for high joint velocities
     ang_vel_xy_reward_scale = -0.001  # Penalty for body roll/pitch
-
-    # Advanced Foot Interaction Rewards (Part 6)
-    feet_clearance_reward_scale = -30.0  # Penalty for not lifting feet during swing
-    tracking_contacts_shaped_force_reward_scale = 4.0  # Reward for proper contact forces
+    torque_reward_scale = -0.0001  # Penalty for high torque usage (energy efficiency)
