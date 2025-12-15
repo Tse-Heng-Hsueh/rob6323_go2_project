@@ -82,7 +82,8 @@ class Rob6323Go2Env(DirectRLEnv):
         self.torque_limits = cfg.torque_limits
 
         # Torque buffer: Store applied torques for reward calculation
-        self._torques = torch.zeros(self.num_envs, 12, device=self.device)
+        # TODO: Re-enable after baseline validation
+        # self._torques = torch.zeros(self.num_envs, 12, device=self.device)
 
         # --- Velocity Commands ---
         # Shape: (num_envs, 3) where 3 = [vx, vy, yaw_rate]
@@ -100,7 +101,7 @@ class Rob6323Go2Env(DirectRLEnv):
                 "track_ang_vel_z_exp",  # Reward for tracking yaw rate command
                 "rew_action_rate",  # Penalty for jerky/sudden actions (Part 1: IMPLEMENTED)
                 "raibert_heuristic",  # Reward for good gait patterns (Part 4: IMPLEMENTED)
-                "rew_torque",  # Penalty for high torque usage (Part 5: IMPLEMENTED)
+                # "rew_torque",  # TODO: Re-enable after baseline validation
                 "orient",  # Penalty for body tilt (Part 5: IMPLEMENTED)
                 "lin_vel_z",  # Penalty for vertical velocity (Part 5: IMPLEMENTED)
                 "dof_vel",  # Penalty for high joint velocities (Part 5: IMPLEMENTED)
@@ -279,6 +280,9 @@ class Rob6323Go2Env(DirectRLEnv):
         # Store torques for reward calculation
         self._torques = torques
 
+        # Store torques for reward calculation (TODO: Re-enable when adding torque penalty)
+        # self._torques = torques
+
         # Send computed torques to robot actuators
         self.robot.set_joint_effort_target(torques)
 
@@ -404,9 +408,9 @@ class Rob6323Go2Env(DirectRLEnv):
         rew_ang_vel_xy = torch.sum(torch.square(self.robot.data.root_ang_vel_b[:, :2]), dim=1)
 
         # 5. Penalize high torque usage (energy efficiency)
-        # Sum the squares of all joint torques to encourage efficient movement.
-        # This prevents the robot from using excessive force, promoting smoother and more natural gaits.
-        rew_torque = torch.sum(torch.square(self._torques), dim=1)
+        # TODO: Re-enable after baseline validation (course requirement)
+        # rew_torque = torch.sum(torch.square(self._torques), dim=1)
+        # rew_torque = torch.zeros(self.num_envs, device=self.device)  # Placeholder
 
         # --- Part 6: Advanced Foot Interaction Rewards ---
         # Calculate foot clearance and contact force rewards
@@ -421,7 +425,7 @@ class Rob6323Go2Env(DirectRLEnv):
             "rew_action_rate": rew_action_rate * self.cfg.action_rate_reward_scale,
             # Note: This reward is negative (penalty) in the config
             "raibert_heuristic": rew_raibert_heuristic * self.cfg.raibert_heuristic_reward_scale,
-            "rew_torque": rew_torque * self.cfg.torque_reward_scale,
+            # "rew_torque": rew_torque * self.cfg.torque_reward_scale,  # TODO: Re-enable after baseline
             "orient": rew_orient * self.cfg.orient_reward_scale,
             "lin_vel_z": rew_lin_vel_z * self.cfg.lin_vel_z_reward_scale,
             "dof_vel": rew_dof_vel * self.cfg.dof_vel_reward_scale,
@@ -441,7 +445,7 @@ class Rob6323Go2Env(DirectRLEnv):
                     rewards["track_ang_vel_z_exp"],
                     rewards["rew_action_rate"],
                     rewards["raibert_heuristic"],
-                    rewards["rew_torque"],
+                    # rewards["rew_torque"],  # TODO: Re-enable after baseline
                     rewards["orient"],
                     rewards["lin_vel_z"],
                     rewards["dof_vel"],
@@ -749,108 +753,120 @@ class Rob6323Go2Env(DirectRLEnv):
 
     def _reward_feet_clearance(self):
         """
-        Penalize feet not lifting high enough during swing phase (Part 6: IMPLEMENTED).
+        Penalize feet not lifting high enough during swing phase (Part 6: REIMPLEMENTED).
 
-        This reward encourages the robot to lift its feet sufficiently during the swing
-        phase of the gait, preventing dragging feet along the ground which would cause:
-        - Increased friction and energy consumption
-        - Unstable gait patterns
-        - Difficulty navigating obstacles
+        Re-implemented based on IsaacGymEnvs logic but using IsaacLab API.
+        Reference: https://github.com/Jogima-cyber/IsaacGymEnvs/blob/main/isaacgymenvs/tasks/go2_terrain.py
+
+        Key differences from IsaacGymEnvs:
+        - IsaacGymEnvs uses dynamic target_height based on gait phase
+        - We adapt the logic to use IsaacLab's ArticulationData API
 
         Physical intuition:
-        - During swing phase (foot in air), we want feet lifted at least 8cm above ground
-        - During stance phase (foot on ground), we don't penalize low height
-        - This creates a clear "lift and place" motion rather than "shuffle and drag"
+        - During swing phase, feet should lift higher in the middle of the swing
+        - Target height varies: low when entering/exiting swing, high in mid-swing
+        - This encourages natural arc-like foot trajectory
 
-        Algorithm (Tyler's version - more stable):
-        1. Get absolute foot heights in world frame
-        2. Use desired_contact_states for smooth swing/stance distinction
-        3. Penalize feet below target height during swing phase
-        4. Use squared penalty for stronger gradient
+        Algorithm:
+        1. Calculate phases: dynamic value that peaks in mid-swing
+        2. Calculate target_height: 0.08 * phases + 0.02 (foot radius offset)
+        3. Get actual foot heights from world frame
+        4. Penalize squared error weighted by swing mask
 
         Returns:
             Penalty (non-negative) for each environment, shape (num_envs,)
-            Higher values = feet not lifted enough during swing
         """
-        # Get absolute foot heights (Z coordinate) in world frame
-        foot_z = self.foot_positions_w[:, :, 2]  # Shape: (num_envs, 4)
+        # Get foot heights (Z coordinate) in world frame
+        foot_height = self.foot_positions_w[:, :, 2]  # Shape: (num_envs, 4)
 
-        # Target absolute height (8cm above world origin)
-        # Tyler uses absolute height which is simpler and more stable
-        target = self.cfg.feet_target_clearance_height
+        # Calculate phases: peaks at 1.0 during mid-swing, 0.0 at stance
+        # This creates a smooth dynamic target that encourages arc-like foot motion
+        # foot_indices range: [0, 1], where 0-0.5 is stance, 0.5-1.0 is swing
+        phases = 1.0 - torch.abs(1.0 - torch.clamp((self.foot_indices * 2.0) - 1.0, 0.0, 1.0) * 2.0)
 
-        # Use desired_contact_states as swing mask (smooth [0,1] values)
-        # When desired_contact_states is close to 0 → foot should be swinging (high)
-        # When desired_contact_states is close to 1 → foot should be on ground (low)
+        # Dynamic target height: varies from 0.02m (at swing start/end) to 0.10m (mid-swing)
+        # 0.02 is foot radius offset, 0.08 is maximum clearance
+        target_height = 0.08 * phases + 0.02  # Shape: (num_envs, 4)
+
+        # Swing mask: 1.0 during swing, 0.0 during stance
+        # desired_contact_states ≈ 1 means foot should be on ground (stance)
+        # desired_contact_states ≈ 0 means foot should be in air (swing)
         swing_mask = 1.0 - self.desired_contact_states  # Shape: (num_envs, 4)
 
-        # Penalize if foot is below target during swing
-        # relu ensures we only penalize when foot_z < target (no reward for being higher)
-        # Square for stronger gradient signal
-        penalty = torch.sum(swing_mask * torch.square(torch.relu(target - foot_z)), dim=1)
+        # Calculate penalty: squared error between target and actual height, weighted by swing mask
+        # Only penalizes during swing phase (swing_mask ≈ 1)
+        penalty = torch.square(target_height - foot_height) * swing_mask
+
+        # Sum across all 4 feet
+        penalty = torch.sum(penalty, dim=1)  # Shape: (num_envs,)
 
         return penalty
 
     def _reward_tracking_contacts_shaped_force(self):
         """
-        Reward feet applying proper contact forces during stance phase (Part 6: IMPLEMENTED).
+        Penalize feet touching ground during swing phase (Part 6: REIMPLEMENTED).
 
-        This reward encourages the robot to:
-        - Push forcefully against the ground during stance phase (for propulsion)
-        - Minimize contact during swing phase (feet should be in air)
-        - Maintain consistent ground contact timing aligned with gait
+        Re-implemented based on IsaacGymEnvs logic but using IsaacLab API.
+        Reference: https://github.com/Jogima-cyber/IsaacGymEnvs/blob/main/isaacgymenvs/tasks/go2_terrain.py
+
+        Key differences from IsaacGymEnvs:
+        - IsaacGymEnvs uses single-sided penalty (only penalize swing contact)
+        - Uses F²/100 for force shaping (squared force, not linear)
+        - We adapt the logic to use IsaacLab's ContactSensorData API
 
         Physical intuition:
-        - During stance, feet should apply significant vertical force (supporting body weight)
-        - During swing, feet should apply zero force (not touching ground)
-        - Proper force application → efficient locomotion and stable gait
+        - During swing phase, feet should NOT touch the ground
+        - Any contact force during swing indicates foot dragging or stumbling
+        - We don't reward stance contact (robot naturally learns this for stability)
 
-        Algorithm (Tyler's version - more stable):
-        1. Get contact forces from sensor
-        2. Apply exponential shaping to map force to [0, 1) range
-        3. Reward shaped force during stance, penalize during swing
-        4. This dual-sided reward provides stronger training signal
+        Algorithm:
+        1. Get contact forces from ContactSensor using _feet_ids_sensor
+        2. Calculate force magnitude for each foot
+        3. Apply exponential shaping: 1 - exp(-F²/100)
+        4. Penalize shaped force during swing phase only
+        5. Average across 4 feet
 
         Returns:
-            Shaped reward for each environment, shape (num_envs,)
-            Positive = good contact timing, negative = poor contact timing
+            Penalty (negative) for each environment, shape (num_envs,)
+            Values closer to 0 = better (less swing contact)
         """
         # Step 1: Get contact forces from sensor
-        # Must use _feet_ids_sensor (NOT _feet_ids)
-        forces_w = self._contact_sensor.data.net_forces_w  # Shape: (N, B, 3)
-        foot_forces = forces_w[:, self._feet_ids_sensor, :]  # Shape: (N, 4, 3)
+        # CRITICAL: Must use _feet_ids_sensor (not _feet_ids) for ContactSensorData
+        forces_w = self._contact_sensor.data.net_forces_w  # Shape: (num_envs, num_bodies, 3)
+        foot_forces = forces_w[:, self._feet_ids_sensor, :]  # Shape: (num_envs, 4, 3)
 
         # Step 2: Calculate force magnitude (L2 norm)
-        force_norm = torch.linalg.norm(foot_forces, dim=-1)  # Shape: (N, 4)
+        force_norm = torch.linalg.norm(foot_forces, dim=-1)  # Shape: (num_envs, 4)
 
-        # Step 3: Apply exponential shaping (Tyler's method)
-        # This maps raw force magnitude to [0, 1) range smoothly:
-        # - Small force (0-10N) → shaped value ≈ 0
-        # - Medium force (30N) → shaped value ≈ 0.5
-        # - Large force (100N+) → shaped value ≈ 0.9
-        k = self.cfg.contact_force_scale  # Default: 50.0
-        force_shaped = 1.0 - torch.exp(-force_norm / k)  # Shape: (N, 4)
+        # Step 3: Get desired contact states
+        desired_contact = self.desired_contact_states  # Shape: (num_envs, 4)
 
-        # Step 4: Define stance and swing masks from desired contact states
-        stance_mask = self.desired_contact_states  # Shape: (N, 4) - close to 1 during stance
-        swing_mask = 1.0 - self.desired_contact_states  # Shape: (N, 4) - close to 1 during swing
+        # Step 4: Calculate penalty using IsaacGymEnvs formula
+        # Key difference: Uses F² (squared) not F (linear), and divided by 100
+        # This creates stronger penalty for large forces during swing
+        rew_tracking_contacts = torch.zeros(self.num_envs, device=self.device)
 
-        # Step 5: Compute reward (Tyler's dual-sided formulation)
-        # Reward: stance_mask * force_shaped (want high force during stance)
-        # Penalty: swing_mask * force_shaped (penalize any force during swing)
-        # This creates stronger training signal than single-sided reward
-        rew_tracking_contacts = torch.sum(
-            stance_mask * force_shaped - swing_mask * force_shaped, dim=1  # Critical: both terms!
-        )  # Shape: (N,)
+        for i in range(4):
+            # Swing mask: 1.0 when foot should be in air, 0.0 when on ground
+            swing_mask_i = 1.0 - desired_contact[:, i]
 
-        # Store debug info for tensorboard logging
-        self._debug_contact_force_magnitude = torch.sum(force_norm, dim=1)  # Sum of 4 feet forces
-        self._debug_desired_contact_states = torch.sum(self.desired_contact_states, dim=1)  # Sum of desired
-        # Binary contact detection for debug (1.0N threshold)
+            # Force shaping: 1 - exp(-F²/100)
+            # F²/100 means: 0N→0, 10N→0.09, 30N→0.59, 100N→0.99
+            # Stronger penalty for high forces than Tyler's linear version
+            force_shaped_i = 1.0 - torch.exp(-1.0 * force_norm[:, i] ** 2 / 100.0)
+
+            # Accumulate penalty (negative sign because we penalize swing contact)
+            rew_tracking_contacts += -swing_mask_i * force_shaped_i
+
+        # Average across 4 feet (IsaacGymEnvs divides by 4)
+        rew_tracking_contacts = rew_tracking_contacts / 4.0
+
+        # --- Debug logging (keep Tyler's debug variables for tensorboard) ---
+        self._debug_contact_force_magnitude = torch.sum(force_norm, dim=1)
+        self._debug_desired_contact_states = torch.sum(desired_contact, dim=1)
         is_in_contact = (force_norm > 1.0).float()
-        self._debug_is_in_contact = torch.sum(is_in_contact, dim=1)  # Count of feet in contact (0-4)
+        self._debug_is_in_contact = torch.sum(is_in_contact, dim=1)
 
-        # Additional debug: sum ALL body forces to verify sensor is working
         all_forces = self._contact_sensor.data.net_forces_w
         all_force_magnitudes = torch.norm(all_forces, dim=-1)
         self._debug_all_body_forces = torch.sum(all_force_magnitudes, dim=1)

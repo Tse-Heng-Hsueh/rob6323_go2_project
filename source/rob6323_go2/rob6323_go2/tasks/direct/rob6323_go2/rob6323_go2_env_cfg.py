@@ -67,11 +67,12 @@ class Rob6323Go2EnvCfg(DirectRLEnvCfg):
     # Guides robot to place feet at positions suggested by Raibert Heuristic
     # Negative scale = penalty (minimize foot placement error)
 
-    # --- Future Rewards (Part 6: TODO) ---
+    # --- Part 6 Rewards (REIMPLEMENTED based on IsaacGymEnvs logic) ---
     feet_clearance_reward_scale = -30.0  # Penalty for not lifting feet during swing
-    tracking_contacts_shaped_force_reward_scale = 4.0  # Reward for proper contact forces
-    feet_target_clearance_height = 0.08  # Target clearance height in meters (8cm for better obstacle avoidance)
-    contact_force_scale = 50.0  # Scaling factor for exponential contact force shaping
+    tracking_contacts_shaped_force_reward_scale = 4.0  # Penalty for swing contact (negative reward)
+    # Note: Implementation uses hardcoded values based on IsaacGymEnvs:
+    #   - feet clearance: 0.08 * phases + 0.02 (dynamic target height)
+    #   - contact force: 1 - exp(-F²/100) (squared force shaping)
 
     state_space = 0  # Not used in this project (for centralized training in multi-agent RL)
 
@@ -123,7 +124,7 @@ class Rob6323Go2EnvCfg(DirectRLEnvCfg):
     # PD control gains
     Kp = 20.0  # Proportional gain
     Kd = 0.5  # Derivative gain
-    torque_limits = 23.5  # Max torque (realistic Go2 hardware limit)
+    torque_limits = 100.0  # Max torque (Tutorial Part 2 recommended value)
 
     # "base_legs" is an arbitrary key we use to group these actuators
     robot_cfg.actuators["base_legs"] = ImplicitActuatorCfg(
@@ -214,4 +215,4 @@ class Rob6323Go2EnvCfg(DirectRLEnvCfg):
     lin_vel_z_reward_scale = -0.02  # Penalty for vertical velocity
     dof_vel_reward_scale = -0.0001  # Penalty for high joint velocities
     ang_vel_xy_reward_scale = -0.001  # Penalty for body roll/pitch
-    torque_reward_scale = -0.0001  # Penalty for high torque usage (energy efficiency)
+    # torque_reward_scale = -0.0001  # TODO: Re-enable after baseline validation (course requirement)
