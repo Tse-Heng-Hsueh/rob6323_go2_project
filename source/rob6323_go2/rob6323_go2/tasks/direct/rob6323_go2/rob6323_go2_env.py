@@ -24,6 +24,9 @@ from .rob6323_go2_env_cfg import Rob6323Go2EnvCfg
 
 import numpy as np
 
+# bonus2 - uneven terrain
+from isaaclab.sensors import RayCaster
+
 class Rob6323Go2Env(DirectRLEnv):
     cfg: Rob6323Go2EnvCfg
 
@@ -101,22 +104,33 @@ class Rob6323Go2Env(DirectRLEnv):
         self.set_debug_vis(self.cfg.debug_vis)
 
     def _setup_scene(self):
+        # robot
         self.robot = Articulation(self.cfg.robot_cfg)
+        self.scene.articulations["robot"] = self.robot
+
+        # sensors
         self._contact_sensor = ContactSensor(self.cfg.contact_sensor)
-        # add ground plane
+        self.scene.sensors["contact_sensor"] = self._contact_sensor
+
+        self._height_scanner = RayCaster(self.cfg.height_scanner)
+        self.scene.sensors["height_scanner"] = self._height_scanner
+
+        # terrain
         self.cfg.terrain.num_envs = self.scene.cfg.num_envs
         self.cfg.terrain.env_spacing = self.scene.cfg.env_spacing
         self._terrain = self.cfg.terrain.class_type(self.cfg.terrain)
+
         # clone and replicate
         self.scene.clone_environments(copy_from_source=False)
-        # we need to explicitly filter collisions for CPU simulation
+
+        # CPU collision filtering: DO THIS (match Anymal)
         if self.device == "cpu":
-            self.scene.filter_collisions(global_prim_paths=[])
-        # add articulation to scene
-        self.scene.articulations["robot"] = self.robot
-        # add lights
+            self.scene.filter_collisions(global_prim_paths=[self.cfg.terrain.prim_path])
+
+        # lights
         light_cfg = sim_utils.DomeLightCfg(intensity=2000.0, color=(0.75, 0.75, 0.75))
         light_cfg.func("/World/Light", light_cfg)
+
 
     # part 2
     def _pre_physics_step(self, actions: torch.Tensor) -> None:
@@ -175,6 +189,15 @@ class Rob6323Go2Env(DirectRLEnv):
 
     def _get_observations(self) -> dict:
         self._previous_actions = self._actions.clone()
+
+        # EXACTLY like Anymal:
+        # height_data = (scanner_pos_z - hit_z - 0.5).clip(-1, 1)
+        height_data = (
+            self._height_scanner.data.pos_w[:, 2].unsqueeze(1)
+            - self._height_scanner.data.ray_hits_w[..., 2]
+            - 0.5
+        ).clip(-1.0, 1.0)
+
         obs = torch.cat(
             [
                 tensor
@@ -185,15 +208,16 @@ class Rob6323Go2Env(DirectRLEnv):
                     self._commands,
                     self.robot.data.joint_pos - self.robot.data.default_joint_pos,
                     self.robot.data.joint_vel,
-                    self._actions,
-                    self.clock_inputs  # Add gait phase info
+                    height_data,       
+                    self._actions,      
+                    self.clock_inputs,  
                 )
                 if tensor is not None
             ],
             dim=-1,
         )
-        observations = {"policy": obs}
-        return observations
+        return {"policy": obs}
+
 
     def _get_rewards(self) -> torch.Tensor:
 
@@ -302,20 +326,22 @@ class Rob6323Go2Env(DirectRLEnv):
 
 
         rewards = {
-            "track_lin_vel_xy_exp": lin_vel_error_mapped * self.cfg.lin_vel_reward_scale,   # Removed step_dt
-            "track_ang_vel_z_exp": yaw_rate_error_mapped * self.cfg.yaw_rate_reward_scale, # Removed step_dt
-            "rew_action_rate": rew_action_rate * self.cfg.action_rate_reward_scale,
-            "raibert_heuristic": rew_raibert_heuristic * self.cfg.raibert_heuristic_reward_scale,
-            "rew_torque": rew_torque * self.cfg.torque_reward_scale,
-            
-            "orient": rew_orient * self.cfg.orient_reward_scale,
-            "lin_vel_z": rew_lin_vel_z * self.cfg.lin_vel_z_reward_scale,
-            "dof_vel": rew_dof_vel * self.cfg.dof_vel_reward_scale,
-            "ang_vel_xy": rew_ang_vel_xy * self.cfg.ang_vel_xy_reward_scale,
+            "track_lin_vel_xy_exp": lin_vel_error_mapped * self.cfg.lin_vel_reward_scale * self.step_dt,
+            "track_ang_vel_z_exp": yaw_rate_error_mapped * self.cfg.yaw_rate_reward_scale * self.step_dt,
 
-            "feet_clearance": rew_feet_clearance * self.cfg.feet_clearance_reward_scale,
-            "tracking_contacts_shaped_force": rew_tracking_contacts * self.cfg.tracking_contacts_shaped_force_reward_scale,
+            "rew_action_rate": rew_action_rate * self.cfg.action_rate_reward_scale * self.step_dt,
+            "raibert_heuristic": rew_raibert_heuristic * self.cfg.raibert_heuristic_reward_scale * self.step_dt,
+            "rew_torque": rew_torque * self.cfg.torque_reward_scale * self.step_dt,
+
+            "orient": rew_orient * self.cfg.orient_reward_scale * self.step_dt,
+            "lin_vel_z": rew_lin_vel_z * self.cfg.lin_vel_z_reward_scale * self.step_dt,
+            "dof_vel": rew_dof_vel * self.cfg.dof_vel_reward_scale * self.step_dt,
+            "ang_vel_xy": rew_ang_vel_xy * self.cfg.ang_vel_xy_reward_scale * self.step_dt,
+
+            "feet_clearance": rew_feet_clearance * self.cfg.feet_clearance_reward_scale * self.step_dt,
+            "tracking_contacts_shaped_force": rew_tracking_contacts * self.cfg.tracking_contacts_shaped_force_reward_scale * self.step_dt,
         }
+
 
         reward = torch.sum(torch.stack(list(rewards.values())), dim=0)
 
@@ -328,7 +354,7 @@ class Rob6323Go2Env(DirectRLEnv):
     def _get_dones(self) -> tuple[torch.Tensor, torch.Tensor]:
         time_out = self.episode_length_buf >= self.max_episode_length - 1
         net_contact_forces = self._contact_sensor.data.net_forces_w_history
-        cstr_termination_contacts = torch.any(torch.max(torch.norm(net_contact_forces[:, :, self._base_id], dim=-1), dim=1)[0] > 1.0, dim=1)
+        cstr_termination_contacts = torch.any(torch.max(torch.norm(net_contact_forces[:, :, self._base_id], dim=-1), dim=1)[0] > 50.0, dim=1)
         cstr_upsidedown = self.robot.data.projected_gravity_b[:, 2] > 0
         # part 3
         # terminate if base is too low
@@ -363,7 +389,18 @@ class Rob6323Go2Env(DirectRLEnv):
 
 
         # Sample new commands
-        self._commands[env_ids] = torch.zeros_like(self._commands[env_ids]).uniform_(-1.0, 1.0)
+        # self._commands[env_ids] = torch.zeros_like(self._commands[env_ids]).uniform_(-1.0, 1.0)
+        # Sample new commands 
+        cmds = self._commands[env_ids]
+
+        # x,y linear vel
+        cmds[:, 0:2] = torch.empty((len(env_ids), 2), device=self.device).uniform_(-0.3, 0.3)
+
+        # yaw rate
+        cmds[:, 2] = torch.empty((len(env_ids),), device=self.device).uniform_(-0.5, 0.5)
+
+        self._commands[env_ids] = cmds
+
         # Reset robot state
         joint_pos = self.robot.data.default_joint_pos[env_ids]
         joint_vel = self.robot.data.default_joint_vel[env_ids]

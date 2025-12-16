@@ -17,6 +17,10 @@ from isaaclab.sensors import ContactSensorCfg
 from isaaclab.markers import VisualizationMarkersCfg
 from isaaclab.markers.config import BLUE_ARROW_X_MARKER_CFG, FRAME_MARKER_CFG, GREEN_ARROW_X_MARKER_CFG
 
+# bonus2 -uneven terrain
+from isaaclab.terrains.config.rough import ROUGH_TERRAINS_CFG
+from isaaclab.sensors import RayCasterCfg, patterns
+
 # part 2
 from isaaclab.actuators import ImplicitActuatorCfg
 
@@ -28,8 +32,33 @@ class Rob6323Go2EnvCfg(DirectRLEnvCfg):
     # - spaces definition
     action_scale = 0.25
     action_space = 12
-    # part 4
-    observation_space = 48 + 4  # Added 4 for clock inputs
+    # # part 4
+    # observation_space = 48 + 4  # Added 4 for clock inputs
+    # bonus2 - uneven terrain
+    # --- Height scanner (RayCaster) ---
+    _height_scan_resolution = 0.1
+    _height_scan_size = (1.6, 1.0)  # (x_size, y_size) in meters
+
+    # grid points count: (size/res) + 1 in each axis
+    _num_height_x = int(_height_scan_size[0] / _height_scan_resolution) + 1
+    _num_height_y = int(_height_scan_size[1] / _height_scan_resolution) + 1
+    num_height_samples = _num_height_x * _num_height_y
+
+    # base obs = 48, plus 4 clock inputs, plus height samples
+    observation_space = (48 + 4) + num_height_samples
+
+    height_scanner = RayCasterCfg(
+        prim_path="/World/envs/env_.*/Robot/base",
+        offset=RayCasterCfg.OffsetCfg(pos=(0.0, 0.0, 0.0)),
+        ray_alignment="yaw",
+        pattern_cfg=patterns.GridPatternCfg(
+            resolution=_height_scan_resolution,
+            size=[_height_scan_size[0], _height_scan_size[1]],
+        ),
+        debug_vis=False,
+        mesh_prim_paths=["/World/ground"],
+    )
+
     state_space = 0
     debug_vis = True
 
@@ -45,9 +74,13 @@ class Rob6323Go2EnvCfg(DirectRLEnvCfg):
             restitution=0.0,
         ),
     )
+    
+    # bonus2 - uneven terrain
     terrain = TerrainImporterCfg(
         prim_path="/World/ground",
-        terrain_type="plane",
+        terrain_type="generator",
+        terrain_generator=ROUGH_TERRAINS_CFG,
+        max_init_terrain_level=1, 
         collision_group=-1,
         physics_material=sim_utils.RigidBodyMaterialCfg(
             friction_combine_mode="multiply",
@@ -73,7 +106,9 @@ class Rob6323Go2EnvCfg(DirectRLEnvCfg):
     )
 
     # scene
-    scene: InteractiveSceneCfg = InteractiveSceneCfg(num_envs=4096, env_spacing=4.0, replicate_physics=True)
+    # scene: InteractiveSceneCfg = InteractiveSceneCfg(num_envs=4096, env_spacing=4.0, replicate_physics=True)
+    # bonus2 - uneven terrain - test 
+    scene: InteractiveSceneCfg = InteractiveSceneCfg(num_envs=512, env_spacing=4.0, replicate_physics=True)
     contact_sensor: ContactSensorCfg = ContactSensorCfg(
         prim_path="/World/envs/env_.*/Robot/.*", history_length=3, update_period=0.005, track_air_time=True
     )
@@ -94,24 +129,24 @@ class Rob6323Go2EnvCfg(DirectRLEnvCfg):
     # reward scales
     lin_vel_reward_scale = 1.0
     yaw_rate_reward_scale = 0.5
-    action_rate_reward_scale = -0.1
-    raibert_heuristic_reward_scale = -10.0
+    action_rate_reward_scale = -0.05
+    raibert_heuristic_reward_scale = -1.0
 
     orient_reward_scale = -5.0
     lin_vel_z_reward_scale = -0.02
     dof_vel_reward_scale = -0.0001
-    ang_vel_xy_reward_scale = -0.001
+    ang_vel_xy_reward_scale = -0.0002
 
     # part 6
-    feet_clearance_reward_scale = -30.0
-    tracking_contacts_shaped_force_reward_scale = 4.0
+    feet_clearance_reward_scale = -5.0
+    tracking_contacts_shaped_force_reward_scale = 0.5
 
     # PD control gains
     Kp = 20.0  # Proportional gain
     Kd = 0.5   # Derivative gain
-    torque_limits = 100.0  # Max torque
+    torque_limits = 23.5  # Max torque
 
     # part 3 - termination
-    base_height_min = 0.20  # Terminate if base is lower than 20cm
+    base_height_min = 0.10  # Terminate if base is lower than 10cm
 
-    torque_reward_scale = -0.0001
+    torque_reward_scale = -2e-5
