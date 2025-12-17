@@ -30,7 +30,7 @@ class Rob6323Go2EnvCfg(DirectRLEnvCfg):
     decimation = 4
     episode_length_s = 20.0
     # - spaces definition
-    action_scale = 0.25
+    action_scale = 0.2
     action_space = 12
     # # part 4
     # observation_space = 48 + 4  # Added 4 for clock inputs
@@ -138,12 +138,12 @@ class Rob6323Go2EnvCfg(DirectRLEnvCfg):
     ang_vel_xy_reward_scale = -0.0002
 
     # part 6
-    feet_clearance_reward_scale = -0.2
-    tracking_contacts_shaped_force_reward_scale = 0.1
+    feet_clearance_reward_scale = -0.05
+    tracking_contacts_shaped_force_reward_scale = 0.05
 
     # PD control gains
     Kp = 15.0  # Proportional gain
-    Kd = 1.0  # Derivative gain
+    Kd = 2.0  # Derivative gain
     torque_limits = 23.5  # Max torque
 
     # part 3 - termination

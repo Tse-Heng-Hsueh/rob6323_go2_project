@@ -339,8 +339,7 @@ class Rob6323Go2Env(DirectRLEnv):
             )
         stance_rew = stance_rew / 4.0
 
-        # (3) combine (stance weight small!)
-        rew_tracking_contacts = swing_pen + 0.1 * stance_rew
+        rew_tracking_contacts = swing_pen 
 
 
         rewards = {
