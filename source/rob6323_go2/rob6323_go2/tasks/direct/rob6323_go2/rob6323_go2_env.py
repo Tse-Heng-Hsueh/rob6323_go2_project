@@ -57,6 +57,7 @@ class Rob6323Go2Env(DirectRLEnv):
                 "ang_vel_xy",  
                 "feet_clearance",
                 "tracking_contacts_shaped_force",
+                "alive",
             ]
         }
 
@@ -190,13 +191,17 @@ class Rob6323Go2Env(DirectRLEnv):
     def _get_observations(self) -> dict:
         self._previous_actions = self._actions.clone()
 
-        # EXACTLY like Anymal:
-        # height_data = (scanner_pos_z - hit_z - 0.5).clip(-1, 1)
-        height_data = (
-            self._height_scanner.data.pos_w[:, 2].unsqueeze(1)
-            - self._height_scanner.data.ray_hits_w[..., 2]
-            - 0.5
-        ).clip(-1.0, 1.0)
+        # (N, 1)
+        scanner_z = self._height_scanner.data.pos_w[:, 2].unsqueeze(1)
+
+        # (N, R)
+        hits_z = self._height_scanner.data.ray_hits_w[..., 2]
+
+        scanner_z_r = scanner_z.expand_as(hits_z)   # (N,R)
+        hits_z = torch.where(torch.isfinite(hits_z), hits_z, scanner_z_r)
+
+        height_data = (scanner_z - hits_z - 0.3).clamp(-1.0, 1.0)
+
 
         obs = torch.cat(
             [
@@ -301,8 +306,9 @@ class Rob6323Go2Env(DirectRLEnv):
         target_height = 0.08 * phases + 0.02  # (N,4)
 
         # only penalize during swing: (1 - desired_contact_states)
-        rew_foot_clearance = torch.square(target_height - foot_height) * (1.0 - self.desired_contact_states)  # (N,4)
-        rew_feet_clearance = torch.sum(rew_foot_clearance, dim=1)  # (N,)
+        clearance_err = torch.relu(target_height - foot_height) 
+        rew_foot_clearance = torch.square(clearance_err) * (1.0 - self.desired_contact_states)
+        rew_feet_clearance = torch.sum(rew_foot_clearance, dim=1)
 
         # (B) contact forces on feet
         forces_w = self._contact_sensor.data.net_forces_w  # (N, B, 3)
@@ -322,7 +328,19 @@ class Rob6323Go2Env(DirectRLEnv):
         # average over 4 feet 
         rew_tracking_contacts_shaped_force = rew_tracking_contacts_shaped_force / 4.0
 
-        rew_tracking_contacts = rew_tracking_contacts_shaped_force
+        # (1) keep your current swing penalty
+        swing_pen = rew_tracking_contacts_shaped_force  
+
+        # (2) add a small stance encouragement
+        stance_rew = torch.zeros(self.num_envs, device=self.device)
+        for i in range(4):
+            stance_rew += desired_contact[:, i] * (
+                1.0 - torch.exp(-1.0 * (foot_forces[:, i] ** 2) / 100.0)
+            )
+        stance_rew = stance_rew / 4.0
+
+        # (3) combine (stance weight small!)
+        rew_tracking_contacts = swing_pen + 0.1 * stance_rew
 
 
         rewards = {
@@ -340,6 +358,7 @@ class Rob6323Go2Env(DirectRLEnv):
 
             "feet_clearance": rew_feet_clearance * self.cfg.feet_clearance_reward_scale * self.step_dt,
             "tracking_contacts_shaped_force": rew_tracking_contacts * self.cfg.tracking_contacts_shaped_force_reward_scale * self.step_dt,
+            "alive": 0.02 * torch.ones(self.num_envs, device=self.device) * self.step_dt,
         }
 
 
@@ -354,7 +373,11 @@ class Rob6323Go2Env(DirectRLEnv):
     def _get_dones(self) -> tuple[torch.Tensor, torch.Tensor]:
         time_out = self.episode_length_buf >= self.max_episode_length - 1
         net_contact_forces = self._contact_sensor.data.net_forces_w_history
-        cstr_termination_contacts = torch.any(torch.max(torch.norm(net_contact_forces[:, :, self._base_id], dim=-1), dim=1)[0] > 50.0, dim=1)
+
+        base_id = int(self._base_id[0]) if isinstance(self._base_id, (list, tuple)) else int(self._base_id)
+        forces = torch.norm(net_contact_forces[:, :, base_id, :], dim=-1)  # (N,H)
+        over = forces > 500.0
+        cstr_termination_contacts = (over.sum(dim=1) >= 3)                # (N,)
         cstr_upsidedown = self.robot.data.projected_gravity_b[:, 2] > 0
         # part 3
         # terminate if base is too low
@@ -384,8 +407,8 @@ class Rob6323Go2Env(DirectRLEnv):
         self.gait_indices[env_ids] = 0.0
 
         # BONUS: randomize friction params per-episode for these envs
-        self._mu_v[env_ids] = torch.empty(len(env_ids), 1, device=self.device).uniform_(0.0, 0.3)
-        self._F_s[env_ids]  = torch.empty(len(env_ids), 1, device=self.device).uniform_(0.0, 2.5)
+        self._mu_v[env_ids] = torch.empty(len(env_ids), 1, device=self.device).uniform_(0.0, 0.1)
+        self._F_s[env_ids]  = torch.empty(len(env_ids), 1, device=self.device).uniform_(0.0, 1.0)
 
 
         # Sample new commands

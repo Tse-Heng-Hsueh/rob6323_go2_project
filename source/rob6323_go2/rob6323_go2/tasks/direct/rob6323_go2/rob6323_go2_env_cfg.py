@@ -45,11 +45,11 @@ class Rob6323Go2EnvCfg(DirectRLEnvCfg):
     num_height_samples = _num_height_x * _num_height_y
 
     # base obs = 48, plus 4 clock inputs, plus height samples
-    observation_space = (48 + 4) + num_height_samples
+    observation_space = (48 + 4 + 12) + num_height_samples
 
     height_scanner = RayCasterCfg(
         prim_path="/World/envs/env_.*/Robot/base",
-        offset=RayCasterCfg.OffsetCfg(pos=(0.0, 0.0, 0.0)),
+        offset=RayCasterCfg.OffsetCfg(pos=(0.0, 0.0, 0.3)),
         ray_alignment="yaw",
         pattern_cfg=patterns.GridPatternCfg(
             resolution=_height_scan_resolution,
@@ -80,7 +80,7 @@ class Rob6323Go2EnvCfg(DirectRLEnvCfg):
         prim_path="/World/ground",
         terrain_type="generator",
         terrain_generator=ROUGH_TERRAINS_CFG,
-        max_init_terrain_level=1, 
+        max_init_terrain_level=0, 
         collision_group=-1,
         physics_material=sim_utils.RigidBodyMaterialCfg(
             friction_combine_mode="multiply",
@@ -108,7 +108,7 @@ class Rob6323Go2EnvCfg(DirectRLEnvCfg):
     # scene
     # scene: InteractiveSceneCfg = InteractiveSceneCfg(num_envs=4096, env_spacing=4.0, replicate_physics=True)
     # bonus2 - uneven terrain - test 
-    scene: InteractiveSceneCfg = InteractiveSceneCfg(num_envs=512, env_spacing=4.0, replicate_physics=True)
+    scene: InteractiveSceneCfg = InteractiveSceneCfg(num_envs=1024, env_spacing=4.0, replicate_physics=True)
     contact_sensor: ContactSensorCfg = ContactSensorCfg(
         prim_path="/World/envs/env_.*/Robot/.*", history_length=3, update_period=0.005, track_air_time=True
     )
@@ -128,22 +128,22 @@ class Rob6323Go2EnvCfg(DirectRLEnvCfg):
 
     # reward scales
     lin_vel_reward_scale = 1.0
-    yaw_rate_reward_scale = 0.5
-    action_rate_reward_scale = -0.05
-    raibert_heuristic_reward_scale = -1.0
+    yaw_rate_reward_scale = 0.3
+    action_rate_reward_scale = -0.01
+    raibert_heuristic_reward_scale = -0.3
 
-    orient_reward_scale = -5.0
+    orient_reward_scale = -1.0
     lin_vel_z_reward_scale = -0.02
-    dof_vel_reward_scale = -0.0001
+    dof_vel_reward_scale = -0.00005
     ang_vel_xy_reward_scale = -0.0002
 
     # part 6
-    feet_clearance_reward_scale = -5.0
-    tracking_contacts_shaped_force_reward_scale = 0.5
+    feet_clearance_reward_scale = -0.2
+    tracking_contacts_shaped_force_reward_scale = 0.1
 
     # PD control gains
-    Kp = 20.0  # Proportional gain
-    Kd = 0.5   # Derivative gain
+    Kp = 15.0  # Proportional gain
+    Kd = 1.0  # Derivative gain
     torque_limits = 23.5  # Max torque
 
     # part 3 - termination
