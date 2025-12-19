@@ -357,6 +357,16 @@ and well-regularized actions.
 
 ---
 
+#### Demo Videos
+
+- **Best Policy Walking**  
+  ▶️ [View video](https://drive.google.com/file/d/1zCYLrkcpdyJ_FR8bAcvP3ZUKvPHeUKTF/view?usp=sharing)
+
+- **Best Policy Walking + Actuator Friction Model with Randomization**  
+  ▶️ [Download / View video](https://drive.google.com/file/d/1281SiEYTac-qzkrMOvSG_a93Y04NnRvB/view?usp=sharing)
+
+---
+
 #### Recommended Evaluation Run
 
 For grading and quick verification, the following run best reflects overall policy quality:
@@ -370,4 +380,3 @@ For grading and quick verification, the following run best reflects overall poli
 
 All referenced runs can be reproduced by pulling this repository and executing `./train.sh`
 on Greene HPC as described above.
-
