@@ -291,6 +291,11 @@ I provide multiple training runs corresponding to each tutorial part and extensi
 All runs were trained using the same repository structure and launch script (`./train.sh`)
 on Greene HPC.
 
+**Reproducibility notes**
+- Training command: `./train.sh`
+- PPO and environment seeds use the default settings defined in the rsl_rl launcher.
+- For exact reproduction, use the provided log directories and checkpoints listed below.
+
 #### Tutorial Reproduction (Parts 1–4) 
 
 The following runs incrementally implement the official tutorial components:
