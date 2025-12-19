@@ -360,10 +360,10 @@ and well-regularized actions.
 #### Demo Videos
 
 - **Best Policy Walking**  
-  ▶️ [View video](https://drive.google.com/file/d/1zCYLrkcpdyJ_FR8bAcvP3ZUKvPHeUKTF/view?usp=sharing)
+  ▶️ [View video (right-click → open in new tab)](https://drive.google.com/file/d/1zCYLrkcpdyJ_FR8bAcvP3ZUKvPHeUKTF/view?usp=sharing)
 
 - **Best Policy Walking + Actuator Friction Model with Randomization**  
-  ▶️ [Download / View video](https://drive.google.com/file/d/1281SiEYTac-qzkrMOvSG_a93Y04NnRvB/view?usp=sharing)
+  ▶️ [View video  (right-click → open in new tab)](https://drive.google.com/file/d/1281SiEYTac-qzkrMOvSG_a93Y04NnRvB/view?usp=sharing)
 
 ---
 
