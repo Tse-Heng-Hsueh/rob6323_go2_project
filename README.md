@@ -164,4 +164,220 @@ The suggested way to inspect these logs is via the Open OnDemand web interface:
     - [ContactSensorData (`_contact_sensor.data`)](https://isaac-sim.github.io/IsaacLab/main/source/api/lab/isaaclab.sensors.html#isaaclab.sensors.ContactSensorData) — Contains `net_forces_w` (contact forces).
 
 ---
-Students should only edit README.md below this line.
+---
+
+# My Modifications (ROB6323 Go2 Project)
+
+This fork extends the provided minimal baseline Go2 walking environment in Isaac Lab by adding a custom torque controller, principled reward shaping, termination logic, and domain randomization for robustness. All changes are implemented with concise inline comments in the two allowed files:
+
+- `source/rob6323_go2/rob6323_go2/tasks/direct/rob6323_go2/rob6323_go2_env.py`
+- `source/rob6323_go2/rob6323_go2/tasks/direct/rob6323_go2/rob6323_go2_env_cfg.py`
+
+## Summary of Major Changes (What / Why)
+
+### Part 1 — Action Smoothness (Action-Rate Penalties)
+**What I changed**
+- Added an action history buffer (`last_actions`, history length = 3).
+- Added action-rate and action-acceleration penalties (1st/2nd discrete derivatives).
+- Added TensorBoard logging key: `rew_action_rate`.
+
+**Why**
+- Encourages smoother control signals and reduces high-frequency oscillations / jitter.
+
+---
+
+### Part 2 — Low-Level PD Torque Controller (Explicit Control)
+**What I changed**
+- Disabled Isaac Lab’s implicit actuator PD by setting actuator `stiffness=0` and `damping=0` in config.
+- Implemented a manual torque-level PD controller in `_apply_action()` using:
+  `tau = Kp * (q_des - q) - Kd * qdot`
+- Clipped torques with `torque_limits` for stability and safety.
+- Added torque penalty term `rew_torque` and logging.
+
+**Why**
+- Makes control behavior explicit and tunable, improves interpretability, and supports adding actuator-level effects.
+
+---
+
+### Part 3 — Early Termination (Base Height)
+**What I changed**
+- Added `base_height_min` threshold in config.
+- Terminate episode if base height falls below threshold (in addition to existing contact/upsidedown termination).
+
+**Why**
+- Speeds up training by ending failed episodes early and reinforces upright locomotion.
+
+---
+
+### Part 4 — Raibert Heuristic Shaping + Observation Expansion
+**What I changed**
+- Implemented gait phase scheduler (`_step_contact_targets`) and Raibert heuristic reward (`_reward_raibert_heuristic`).
+- Added 4-D clock inputs (`clock_inputs`) appended to policy observations.
+- Increased `observation_space` from 48 → 52.
+- Added logging key: `raibert_heuristic`.
+
+**Why**
+- Provides a principled “teacher” signal for foot placement and helps policy learn periodic gait structure.
+
+---
+
+### Part 5 — Posture & Motion Stabilization Penalties
+**What I changed**
+- Added penalties:
+  - `orient`: tilt penalty via projected gravity XY
+  - `lin_vel_z`: vertical bouncing penalty
+  - `dof_vel`: joint velocity penalty
+  - `ang_vel_xy`: roll/pitch angular velocity penalty
+- Added corresponding scales in config and TensorBoard logging keys.
+
+**Why**
+- Improves gait stability and reduces unstable body motion.
+
+---
+
+### Part 6 — Foot Interaction Shaping (Clearance + Contact Forces)
+**What I changed**
+- Implemented swing-phase foot clearance shaping using gait phase.
+- Implemented contact force shaping using `ContactSensorData.net_forces_w`.
+- Carefully separated indices:
+  - `_feet_ids` for robot kinematics (positions)
+  - `_feet_ids_sensor` for contact sensor indexing (forces)
+- Added logging keys: `feet_clearance`, `tracking_contacts_shaped_force`.
+
+**Why**
+- Encourages appropriate foot swing height and discourages ground contact when foot is expected to be in swing, improving stepping quality.
+
+---
+
+### Bonus 1 — Domain Randomization: Actuator Friction
+**What I changed**
+- Added per-episode randomization of actuator friction parameters in `_reset_idx`:
+  - viscous friction coefficient `mu_v`
+  - stiction magnitude `F_s`
+- Applied friction torque in `_apply_action`:
+  tau_friction = F_s * tanh(qdot / eps) + mu_v * qdot
+
+**Why**
+- Improves robustness by training policies that tolerate actuator variability (basic sim robustness strategy).
+
+---
+
+## Files Changed
+- `rob6323_go2_env.py`: controller, observations, rewards, termination, reset randomization, logging
+- `rob6323_go2_env_cfg.py`: reward scales, observation dim update, PD disabling, controller gains, termination threshold
+
+---
+## How to Reproduce My Results (Greene HPC)
+
+### 1. Pull latest code
+
+    cd "$HOME/rob6323_go2_project"
+    git pull
+
+### 2. Launch training
+
+    cd "$HOME/rob6323_go2_project"
+    ./train.sh
+
+### 3. Monitor job
+
+    ssh burst "squeue -u $USER"
+
+---
+### Reference Runs and Rubric Coverage
+
+To clearly demonstrate compliance with the grading rubric (Policy Quality),
+I provide multiple training runs corresponding to each tutorial part and extension.
+All runs were trained using the same repository structure and launch script (`./train.sh`)
+on Greene HPC.
+
+**Reproducibility notes**
+- Training command: `./train.sh`
+- PPO and environment seeds use the default settings defined in the rsl_rl launcher.
+- For exact reproduction, use the provided log directories and checkpoints listed below.
+
+#### Tutorial Reproduction (Parts 1–4) 
+
+The following runs incrementally implement the official tutorial components:
+
+- **Baseline (no shaping):**  
+  `logs/132488/`  
+  Minimal velocity-tracking baseline provided by the starter code.
+
+- **Part 1 – Action rate penalties:**  
+  `logs/132469/`  
+  Adds action smoothness regularization using first- and second-order action differences.
+
+- **Part 2 – Low-level PD torque controller:**  
+  `logs/132639/`  
+  Disables implicit actuator PD and applies explicit torque-level PD control.
+
+- **Part 3 – Early termination (base height):**  
+  `logs/132657/`  
+  Terminates episodes when base height drops below a threshold.
+
+- **Part 4 – Raibert heuristic + clock inputs:**  
+  `logs/132672/`  
+  Adds gait phase scheduling, Raibert foot placement shaping, and 4-D clock inputs.
+
+Together, these runs reproduce the tutorial Parts 1–4 as required.
+
+---
+
+#### Walking / Trotting Gait, Stability, Command Following 
+
+- **Part 5 – Posture and motion stabilization:**  
+  `logs/133245/`  
+  Adds penalties for body tilt, vertical bouncing, joint velocity, and roll/pitch rates,
+  resulting in a stable walking gait with low oscillations and reasonable base height.
+
+- **Part 6 – Foot interaction shaping:**  
+  `logs/133448/`  
+  Introduces swing-phase foot clearance shaping and contact-force penalties using
+  ContactSensor data. Produces a clear, periodic footfall pattern (walking / trotting),
+  avoids hopping or pacing, and improves ground contact behavior.
+
+These runs demonstrate:
+- Stable base attitude and height
+- Clear periodic gait
+- Reliable command following for $(v_x, v_y, \dot{\psi})$
+- Proper alignment of command (green) and actual velocity (blue) arrows in videos
+
+---
+
+#### Action Regularization and Robustness (Bonus) 
+
+- **Bonus 1 – Actuator friction domain randomization:**  
+  `logs/133470/`  
+  Adds per-episode randomization of viscous and stiction friction coefficients at the
+  actuator level. Improves robustness while maintaining smooth torques and motions.
+
+Torque magnitude penalties use a small scale (−0.0001), resulting in visually smooth
+and well-regularized actions.
+
+---
+
+#### Demo Videos
+
+- **Best Policy Walking**  
+  ▶️ [View video (right-click → open in new tab)](https://drive.google.com/file/d/1zCYLrkcpdyJ_FR8bAcvP3ZUKvPHeUKTF/view?usp=sharing)
+
+- **Best Policy Walking + Actuator Friction Model with Randomization**  
+  ▶️ [View video  (right-click → open in new tab)](https://drive.google.com/file/d/1281SiEYTac-qzkrMOvSG_a93Y04NnRvB/view?usp=sharing)
+
+---
+
+#### Recommended Evaluation Run
+
+For grading and quick verification, the following run best reflects overall policy quality:
+
+- **Recommended run log dir:**  
+  `logs/133448/`  and `logs/133470/`
+- **Representative checkpoint:**  
+  `model_<EPOCH>.pt` (from the end of training)  
+- **Notes:**  
+  Stable walking gait, low base oscillation, smooth actions, and accurate command tracking.
+
+All referenced runs can be reproduced by pulling this repository and executing `./train.sh`
+on Greene HPC as described above.
+
