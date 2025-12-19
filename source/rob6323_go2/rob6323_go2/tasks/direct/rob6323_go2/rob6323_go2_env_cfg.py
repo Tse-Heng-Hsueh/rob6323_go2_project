@@ -3,6 +3,16 @@
 #
 # SPDX-License-Identifier: BSD-3-Clause
 
+
+# Training / environment configuration (organized by tutorial parts)
+#   Part 1: action_rate_reward_scale
+#   Part 2: custom PD gains + disable implicit actuator PD (stiffness/damping=0)
+#   Part 3: base_height_min termination threshold
+#   Part 4: observation_space expanded (+4 clock inputs), Raibert shaping scale
+#   Part 5: stabilization penalty scales
+#   Part 6: foot interaction shaping scales
+#   Bonus 1: (implemented in env.py) friction randomization ranges
+
 from isaaclab_assets.robots.unitree import UNITREE_GO2_CFG
 
 import isaaclab.envs.mdp as mdp
@@ -28,7 +38,8 @@ class Rob6323Go2EnvCfg(DirectRLEnvCfg):
     # - spaces definition
     action_scale = 0.25
     action_space = 12
-    # part 4
+    # part 4 : Observation space includes 4 additional gait clock inputs.
+    # Baseline obs dim = 48, +4 = 52 total.
     observation_space = 48 + 4  # Added 4 for clock inputs
     state_space = 0
     debug_vis = True
@@ -64,6 +75,9 @@ class Rob6323Go2EnvCfg(DirectRLEnvCfg):
     # Update robot_cfg
     robot_cfg: ArticulationCfg = UNITREE_GO2_CFG.replace(prim_path="/World/envs/env_.*/Robot")
     # "base_legs" is an arbitrary key we use to group these actuators
+    # Part 2: Disable simulator's implicit PD (stiffness/damping=0)
+    # We apply our own torque-level PD controller in rob6323_go2_env.py.
+    # This makes controller behavior explicit and easier to modify/analyze.
     robot_cfg.actuators["base_legs"] = ImplicitActuatorCfg(
         joint_names_expr=[".*_hip_joint", ".*_thigh_joint", ".*_calf_joint"],
         effort_limit=23.5,
@@ -106,12 +120,15 @@ class Rob6323Go2EnvCfg(DirectRLEnvCfg):
     feet_clearance_reward_scale = -30.0
     tracking_contacts_shaped_force_reward_scale = 4.0
 
+    # Part 2: Low-level PD controller gains used in env._apply_action()
+    # torque_limits defines clipping bound for safety/stability.
     # PD control gains
     Kp = 20.0  # Proportional gain
     Kd = 0.5   # Derivative gain
     torque_limits = 100.0  # Max torque
 
     # part 3 - termination
+    # Early termination if base height drops below threshold (fallen robot).
     base_height_min = 0.20  # Terminate if base is lower than 20cm
 
     torque_reward_scale = -0.0001
