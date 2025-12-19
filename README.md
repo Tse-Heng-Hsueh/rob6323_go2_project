@@ -189,8 +189,8 @@ This fork extends the provided minimal baseline Go2 walking environment in Isaac
 ### Part 2 — Low-Level PD Torque Controller (Explicit Control)
 **What I changed**
 - Disabled Isaac Lab’s implicit actuator PD by setting actuator `stiffness=0` and `damping=0` in config.
-- Implemented a manual torque-level PD controller in `_apply_action()`:
-  \tau = Kp*(q_des - q) - Kd*qdot
+- Implemented a manual torque-level PD controller in `_apply_action()` using:
+  `tau = Kp * (q_des - q) - Kd * qdot`
 - Clipped torques with `torque_limits` for stability and safety.
 - Added torque penalty term `rew_torque` and logging.
 
@@ -262,11 +262,9 @@ This fork extends the provided minimal baseline Go2 walking environment in Isaac
 
 ---
 
-## Files Changed (Exactly Two)
+## Files Changed
 - `rob6323_go2_env.py`: controller, observations, rewards, termination, reset randomization, logging
 - `rob6323_go2_env_cfg.py`: reward scales, observation dim update, PD disabling, controller gains, termination threshold
-
-No other project files were modified.
 
 ---
 ## How to Reproduce My Results (Greene HPC)
